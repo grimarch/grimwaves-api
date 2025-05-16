@@ -211,7 +211,7 @@ jobs:
         run: mkdir -p reports
 
       - name: Create application logs directory
-        run: mkdir -p logs
+        run: mkdir -p logs && sudo chown -R runner:runner logs
 
       - name: Start services for E2E tests
         run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build
