@@ -203,7 +203,7 @@ jobs:
         run: mkdir -p reports
 
       - name: Start services for E2E tests
-        run: docker-compose -f docker-compose.e2e.yml up --build -d
+        run: docker compose -f docker-compose.e2e.yml up --build -d
 
       - name: Wait for API to be ready
         run: |
@@ -214,7 +214,7 @@ jobs:
           until curl --output /dev/null --silent --head --fail --insecure https://api.grimwaves.local/health; do
             if [ $elapsed -ge $timeout ]; then
               echo "Timeout waiting for API!"
-              docker-compose -f docker-compose.e2e.yml logs
+              docker compose -f docker-compose.e2e.yml logs
               exit 1
             fi
             printf '.'
@@ -239,11 +239,11 @@ jobs:
       
       - name: Docker logs on failure
         if: failure()
-        run: docker-compose -f docker-compose.e2e.yml logs
+        run: docker compose -f docker-compose.e2e.yml logs
 
       - name: Stop services
         if: always() # Always run to clean up
-        run: docker-compose -f docker-compose.e2e.yml down
+        run: docker compose -f docker-compose.e2e.yml down
 
   build_and_push_docker_image:
     name: Build and Push Docker Image
