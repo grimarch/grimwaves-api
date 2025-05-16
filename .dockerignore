@@ -1,0 +1,13 @@
+.git
+.venv
+.mypy_cache
+.ruff_cache
+.vscode
+.cursor
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+logs/*
+!logs/.gitkeep
+.gitignore

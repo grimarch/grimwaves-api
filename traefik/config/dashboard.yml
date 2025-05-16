@@ -1,0 +1,16 @@
+http:
+  routers:
+    dashboard:
+      entryPoints:
+        - dashboard
+      rule: "Host(`traefik.grimwaves.local`)"
+      service: api@internal
+      middlewares:
+        - auth
+
+  middlewares:
+    auth:
+      basicAuth:
+        users:
+          - "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"  # admin / test
+

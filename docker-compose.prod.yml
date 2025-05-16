@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  traefik:
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/config:/etc/traefik/config:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/acme.json:/etc/traefik/acme.json
+    environment:
+      - DUCKDNS_TOKEN=${DUCKDNS_TOKEN}
+      - DUCKDNS_DOMAIN=${DUCKDNS_DOMAIN}
+      - ENVIRONMENT=production
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${DUCKDNS_DOMAIN}`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=duckdns"
+      - "traefik.http.routers.dashboard.middlewares=auth@file"
+
+  api:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`${DUCKDNS_DOMAIN}`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=duckdns"
+      - "traefik.http.services.api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.api-http.rule=Host(`${DUCKDNS_DOMAIN}`)"
+      - "traefik.http.routers.api-http.entrypoints=web"
+      - "traefik.http.routers.api-http.service=api@docker"
+      - "traefik.http.routers.api-http.middlewares=redirect-to-https@file"
+    environment:
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - GRIMWAVES_CELERY_BROKER_URL=redis://redis:6379/0
+      - GRIMWAVES_CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GRIMWAVES_REDIS_URL=redis://redis:6379/1
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A grimwaves_api.core.celery_app worker --loglevel=info
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data:ro
+      - ./vault-agent/rendered:/vault-agent/rendered:ro
+    environment:
+      - SETTINGS_ENV_FILE=/vault-agent/rendered/.env
+      - ENVIRONMENT=production
+      - DEBUG=false
+      - GRIMWAVES_CELERY_BROKER_URL=redis://redis:6379/0
+      - GRIMWAVES_CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GRIMWAVES_REDIS_URL=redis://redis:6379/1
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - api
+
+volumes:
+  redis-data:
+    name: grimwaves-redis-data-prod
+

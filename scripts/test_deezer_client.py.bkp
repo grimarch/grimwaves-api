@@ -1,0 +1,70 @@
+"""Script for manually testing Deezer API client.
+
+This script demonstrates real API calls to Deezer API.
+Run this script to verify the Deezer client functionality in isolation.
+"""
+
+import asyncio
+import logging
+
+from grimwaves_api.modules.music_metadata.clients.deezer import DeezerClient
+
+# Настройка логирования
+logging.basicConfig(level=logging.DEBUG)
+
+
+async def main() -> None:
+    """Run the tests with the real Deezer API."""
+    client = DeezerClient()
+    print("Testing Deezer API client...")
+
+    try:
+        # Поиск релиза
+        print("\n🔍 Searching for 'Fortitude' by 'Gojira'...")
+        search_results = await client.search_releases("Gojira", "Fortitude")
+
+        if not search_results or not search_results.get("data"):
+            print("❌ No results found")
+            return
+
+        # Вывод основной информации о найденных релизах
+        print(f"✅ Found {len(search_results.get('data', []))} results:")
+        for idx, album in enumerate(search_results.get("data", [])[:3]):
+            print(f"{idx + 1}. {album.get('title')} by {album.get('artist', {}).get('name')}")
+            print(f"   Album ID: {album.get('id')}")
+
+        # Получение информации о первом альбоме из результатов
+        album_id = search_results.get("data", [])[0].get("id")
+        if album_id:
+            print(f"\n📀 Getting details for album ID: {album_id}")
+            album_details = await client.get_album(str(album_id))
+            print("✅ Album details:")
+            print(f"Title: {album_details.get('title')}")
+            print(f"Artist: {album_details.get('artist', {}).get('name')}")
+            print(f"Release date: {album_details.get('release_date')}")
+            print(f"Label: {album_details.get('label')}")
+
+            # Получение треков альбома
+            print("\n🎵 Getting tracks for the album...")
+            tracks = await client.get_album_tracks(str(album_id))
+            print(f"✅ Found {len(tracks)} tracks:")
+            for idx, track in enumerate(tracks[:5]):  # показываем только первые 5 треков
+                print(f"{idx + 1}. {track.get('title')} - {track.get('duration')}s")
+
+                # Получение ISRC кода для первого трека
+                if idx == 0:
+                    track_id = track.get("id")
+                    print(f"\n📊 Getting details for track ID: {track_id}")
+                    track_details = await client.get_track(str(track_id))
+                    print(f"ISRC: {track_details.get('isrc', 'N/A')}")
+
+    except Exception as e:
+        print(f"❌ Error occurred: {e}")
+
+    finally:
+        await client.close()
+        print("\n✅ Tests completed")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

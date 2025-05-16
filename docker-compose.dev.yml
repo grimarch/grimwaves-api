@@ -1,0 +1,56 @@
+---
+services:
+  traefik:
+    volumes:
+      - ./traefik/traefik.dev.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/config:/etc/traefik/config:ro
+      - ./traefik/config/certs:/etc/traefik/certs:ro
+    extra_hosts:
+      - "api.grimwaves.local:127.0.0.1"
+      - "grimwaves.local:127.0.0.1"
+      - "health.local:127.0.0.1"
+
+  api:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.grimwaves.local`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.services.api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.tls.domains[0].main=api.grimwaves.local"
+      - "traefik.http.routers.api.tls.domains[0].sans=grimwaves.local,*.grimwaves.local"
+      - "traefik.http.routers.api-http.rule=Host(`api.grimwaves.local`)"
+      - "traefik.http.routers.api-http.entrypoints=web"
+      - "traefik.http.routers.api-http.service=api@docker"
+    environment:
+      - GRIMWAVES_CELERY_BROKER_URL=redis://redis:6379/0
+      - GRIMWAVES_CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GRIMWAVES_REDIS_URL=redis://redis:6379/1
+
+  redis:
+    image: redis:7.4.3-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A grimwaves_api.core.celery_app worker --loglevel=info
+    volumes:
+      - ./:/app
+      - ./logs:/app/logs
+      - ./vault-agent/rendered:/vault-agent/rendered:ro
+    environment:
+      - SETTINGS_ENV_FILE=/vault-agent/rendered/.env
+      - GRIMWAVES_CELERY_BROKER_URL=redis://redis:6379/0
+      - GRIMWAVES_CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GRIMWAVES_REDIS_URL=redis://redis:6379/1
+    depends_on:
+      - redis
+
+volumes:
+  redis-data:

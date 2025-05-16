@@ -1,0 +1,289 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*.*.*'] # Также запускаем по тегам вида v1.2.3
+  pull_request:
+    branches: ['**']
+
+permissions:
+  contents: read
+  packages: write # Необходимо для push в GHCR
+
+jobs:
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --no-interaction --no-root
+
+      - name: Install project
+        run: poetry install --no-interaction
+
+      - name: Run Ruff Linter
+        run: poetry run ruff check .
+
+      - name: Run MyPy Type Checker
+        run: poetry run mypy .
+
+  security:
+    name: Security Checks
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --no-interaction --no-root
+
+      - name: Install project
+        run: poetry install --no-interaction
+
+      - name: Check for vulnerabilities (Safety)
+        env:
+          SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
+        run: make check-vulns
+
+      - name: Check code security (Bandit)
+        run: make check-code-security
+
+      - name: Scan configuration files (Trivy)
+        run: make scan-config
+
+  test:
+    name: Run Tests and Collect Coverage
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
+
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: poetry install --no-interaction --no-root
+
+      - name: Install project
+        run: poetry install --no-interaction
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      - name: Run tests with coverage
+        run: |
+          poetry run pytest \
+            --cov=grimwaves_api \
+            --cov-report=xml:reports/coverage.xml \
+            --cov-report=html:reports/htmlcov \
+            --junitxml=reports/junit-tests.xml \
+            tests/unit \
+            tests/integration --run-integration
+
+      - name: Upload test results (JUnit XML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-junit
+          path: reports/junit-tests.xml
+
+      - name: Upload coverage report (XML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-xml
+          path: reports/coverage.xml
+
+      - name: Upload coverage report (HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-html
+          path: reports/htmlcov
+
+  build_and_push_docker_image:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    permissions: # Добавляем/обновляем permissions для загрузки SARIF
+      contents: read
+      packages: write
+      security-events: write # Необходимо для github/codeql-action/upload-sarif
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+          tags: |
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=,suffix=,event=branch
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'master') }}
+            
+      - name: Build and push Docker image
+        id: build_push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Scan image with Trivy
+        if: github.event_name != 'pull_request' # Сканируем только если образ был опубликован
+        uses: aquasecurity/trivy-action@master 
+        with:
+          image-ref: 'ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ steps.meta.outputs.version }}' # Используем один из тегов, желательно самый конкретный, например, тег ветки или git-тег
+          format: 'template'
+          template: '@/contrib/sarif.tpl'
+          output: 'trivy-results.sarif'
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          vuln-type: 'os,library'
+          ignore-unfixed: true # Игнорировать уязвимости, для которых нет исправления
+
+      - name: Upload Trivy scan results to GitHub Security Tab
+        if: github.event_name != 'pull_request' # Только если сканирование было выполнено
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'docker-image' # Категория для группировки в Security Tab
+
+      - name: Upload Trivy scan report as artifact (table format)
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-scan-report-table
+          path: trivy-scan-report-table.txt # Временный файл для отчета в формате table
+          retention-days: 7
+      
+      - name: Run Trivy again for table output (temporary step for artifact)
+        if: github.event_name != 'pull_request'
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v $PWD:/workdir \
+            aquasec/trivy:latest image \
+            --format table \
+            --output /workdir/trivy-scan-report-table.txt \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --vuln-type os,library \
+            --ignore-unfixed \
+            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ steps.meta.outputs.version }}
+
+  create_release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build_and_push_docker_image # Запускаем после успешной сборки и пуша образа
+    if: startsWith(github.ref, 'refs/tags/v') # Только для тегов вида v*.*.*
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4 # Нужен для доступа к README, если захотим его прикрепить или использовать в теле
+
+      - name: Get image digest
+        # Этот шаг может быть сложнее, если build_push не выводит дайджест напрямую
+        # или если нужно получить дайджест конкретного тега из GHCR.
+        # Для простоты пока пропустим точное указание дайджеста в релизе.
+        # Дайджест образа доступен в outputs шага docker/build-push-action, если он был выполнен:
+        # ${{ needs.build_and_push_docker_image.outputs.digest }} - но needs.job_id.outputs не работает так просто
+        # Вместо этого можно передавать outputs между jobs через артефакты или использовать API.
+        # Пока сделаем релиз без явного дайджеста образа в теле.
+        run: echo "Image digest can be found in the build logs or GHCR for tag ${{ github.ref_name }}"
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }} # Используем имя тега, которое вызвало workflow
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            Automated release for tag ${{ github.ref_name }}.
+            Docker image published to GHCR with tag: `${{ github.ref_name }}`
+            (and other tags like semver, branch, sha if applicable during the build).
+            
+            To pull the image:
+            `docker pull ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.ref_name }}`
+            
+            *The README for this version is included inside the Docker image.*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}

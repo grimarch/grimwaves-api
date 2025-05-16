@@ -1,0 +1,134 @@
+#!/usr/bin/env python
+"""Test script for Spotify API client.
+
+This script demonstrates the usage of the SpotifyClient class
+and tests its functionality for retrieving music metadata.
+"""
+
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+from grimwaves_api.modules.music_metadata.clients import SpotifyClient
+
+# Add the project root to the Python path
+PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+
+    _ = load_dotenv(PROJECT_ROOT / ".env")
+    print("Environment variables loaded from .env file")
+except ImportError:
+    print("Warning: python-dotenv not installed, environment variables may not be loaded")
+
+
+async def test_search_releases(client: SpotifyClient, artist: str, album: str) -> str | None:
+    """Test searching for releases."""
+    print(f"\n=== Testing search_releases for {artist} - {album} ===")
+    try:
+        results = await client.search_releases(artist, album)
+        albums = results.get("albums", {}).get("items", [])
+        print(f"Found {len(albums)} results")
+
+        if albums:
+            print("\nFirst matching album:")
+            album_data = albums[0]
+            print(f"  Name: {album_data.get('name')}")
+            print(f"  ID: {album_data.get('id')}")
+            print(f"  Release date: {album_data.get('release_date')}")
+            print(f"  Total tracks: {album_data.get('total_tracks')}")
+
+            # Save first album ID for subsequent tests
+            return album_data.get("id")
+    except Exception as e:
+        print(f"Error in search_releases: {e}")
+
+    return None
+
+
+async def test_get_album(client: SpotifyClient, album_id: str) -> None:
+    """Test getting detailed album information."""
+    print(f"\n=== Testing get_album for ID: {album_id} ===")
+    try:
+        album = await client.get_album(album_id)
+        print(f"Album name: {album.get('name')}")
+        print(f"Artist: {album.get('artists', [{}])[0].get('name', 'Unknown')}")
+        print(f"Release date: {album.get('release_date')}")
+        print(f"Label: {album.get('label')}")
+        print("\nTracks:")
+        for idx, track in enumerate(album.get("tracks", {}).get("items", [])):
+            print(f"  {idx + 1}. {track.get('name')}")
+    except Exception as e:
+        print(f"Error in get_album: {e}")
+
+
+async def test_get_tracks_with_isrc(client: SpotifyClient, album_id: str) -> None:
+    """Test getting tracks with ISRC codes."""
+    print(f"\n=== Testing get_tracks_with_isrc for album ID: {album_id} ===")
+    try:
+        tracks = await client.get_tracks_with_isrc(album_id)
+        print(f"Retrieved {len(tracks)} tracks with ISRC codes")
+
+        for idx, track in enumerate(tracks):
+            print(f"  {idx + 1}. {track.get('title')} - ISRC: {track.get('isrc')}")
+    except Exception as e:
+        print(f"Error in get_tracks_with_isrc: {e}")
+
+
+async def main() -> None:
+    """Run all tests for the Spotify client."""
+    print("Starting Spotify API client tests...")
+
+    # Print environment variables for debugging
+    client_id = os.environ.get("GRIMWAVES_SPOTIFY_CLIENT_ID", "")
+    client_secret = os.environ.get("GRIMWAVES_SPOTIFY_CLIENT_SECRET", "")
+    print(f"Client ID from env: {'Yes (length: ' + str(len(client_id)) + ')' if client_id else 'No'}")
+    print(f"Client Secret from env: {'Yes (length: ' + str(len(client_secret)) + ')' if client_secret else 'No'}")
+
+    # Test parameters
+    artist = "Gojira"
+    album = "Fortitude"
+
+    # Create the client
+    client = SpotifyClient()
+
+    # Явная установка учетных данных из переменных окружения
+    if client_id and client_secret and (not client.client_id or not client.client_secret):
+        client.client_id = client_id
+        client.client_secret = client_secret
+        print("Manually set Spotify credentials from environment variables")
+
+    print(f"Client ID in client: {'Yes (length: ' + str(len(client.client_id)) + ')' if client.client_id else 'No'}")
+    print(
+        f"Client Secret in client: {'Yes (length: ' + str(len(client.client_secret)) + ')' if client.client_secret else 'No'}",
+    )
+
+    try:
+        # Test authentication
+        print("\n=== Testing authentication ===")
+        token = await client.authenticate()
+        print(f"Authentication successful: {token.token_type} token received")
+
+        # Test search
+        album_id = await test_search_releases(client, artist, album)
+
+        if album_id:
+            # Test album details
+            await test_get_album(client, album_id)
+
+            # Test tracks with ISRC
+            await test_get_tracks_with_isrc(client, album_id)
+    except Exception as e:
+        print(f"Error in testing: {e}")
+    finally:
+        # Close the client
+        await client.close()
+        print("\nClient closed. Tests completed.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

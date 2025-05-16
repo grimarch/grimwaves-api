@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Test script to check the functionality of MusicBrainzClient.
+
+This script demonstrates the use of MusicBrainzClient to search for releases
+and get information about artist genres and social links.
+
+Run:
+    python -m grimwaves_api.scripts.test_musicbrainz_client
+"""
+
+import asyncio
+import sys
+
+from grimwaves_api.modules.music_metadata.clients import MusicBrainzClient
+
+
+async def test_search_releases():
+    """Test searching for releases."""
+    print("\n=== Test searching for releases ===")
+    client = MusicBrainzClient()
+
+    try:
+        # Test query for searching a release
+        artist = "Metallica"
+        album = "Master of Puppets"
+
+        print(f"Searching for release: {artist} - {album}")
+        results = await client.search_releases(artist=artist, album=album, limit=10)
+
+        if not results.get("releases"):
+            print("Releases not found.")
+            return None, None
+
+        print(f"Found releases: {len(results.get('releases', []))}")
+
+        # Search for a specific Metallica release (official)
+        metallica_release = None
+        metallica_artist_id = None
+
+        for release in results.get("releases", []):
+            if release.get("status") == "Official":
+                for credit in release.get("artist-credit", []):
+                    if credit.get("name") == "Metallica" and "artist" in credit:
+                        metallica_release = release
+                        metallica_artist_id = credit["artist"].get("id")
+                        break
+                if metallica_release:
+                    break
+
+        # If official release not found, take the first with Metallica
+        if not metallica_release:
+            for release in results.get("releases", []):
+                for credit in release.get("artist-credit", []):
+                    if credit.get("name") == "Metallica" and "artist" in credit:
+                        metallica_release = release
+                        metallica_artist_id = credit["artist"].get("id")
+                        break
+                if metallica_release:
+                    break
+
+        # If still not found, take the first result
+        if not metallica_release and results.get("releases"):
+            metallica_release = results["releases"][0]
+            artists = metallica_release.get("artist-credit", [])
+            if artists and "artist" in artists[0]:
+                metallica_artist_id = artists[0]["artist"].get("id")
+
+        if metallica_release:
+            print("\nFound release:")
+            print(f"Title: {metallica_release.get('title')}")
+            print(f"ID: {metallica_release.get('id')}")
+            print(f"Status: {metallica_release.get('status')}")
+            artists = metallica_release.get("artist-credit", [])
+            artist_names = [a.get("name", "") for a in artists]
+            print(f"Artists: {', '.join(artist_names)}")
+
+            return metallica_release.get("id"), metallica_artist_id
+
+    except Exception as e:
+        print(f"Error searching for releases: {e}")
+    finally:
+        await client.close()
+
+    return None, None
+
+
+async def test_get_release(release_id) -> None:
+    """Test getting release information."""
+    if not release_id:
+        print("\n=== Test getting release skipped (ID not found) ===")
+        return
+
+    print(f"\n=== Test getting release information for {release_id} ===")
+    client = MusicBrainzClient()
+
+    try:
+        release_info = await client.get_release(
+            release_id=release_id,
+            inc=["recordings", "artists", "labels"],
+        )
+
+        print(f"Title: {release_info.get('title')}")
+        print(f"Release date: {release_info.get('date')}")
+
+        if "media" in release_info:
+            tracks = []
+            for medium in release_info["media"]:
+                for track in medium.get("tracks", []):
+                    tracks.append(track)
+
+            print(f"Tracks: {len(tracks)}")
+            if tracks:
+                print("\nExample tracks:")
+                for i, track in enumerate(tracks[:3], 1):
+                    print(f"{i}. {track.get('title')}")
+                if len(tracks) > 3:
+                    print("...")
+
+    except Exception as e:
+        print(f"Error getting release information: {e}")
+    finally:
+        await client.close()
+
+
+async def test_get_social_links(artist_id) -> None:
+    """Test getting artist social links."""
+    if not artist_id:
+        print("\n=== Test getting social links skipped (ID not found) ===")
+        # Use known Metallica ID directly if not found
+        artist_id = "65f4f0c5-ef9e-490c-aee3-909e7ae6b2ab"
+        print(f"Using Metallica ID: {artist_id}")
+
+    print(f"\n=== Test getting social links for artist {artist_id} ===")
+    client = MusicBrainzClient()
+
+    try:
+        social_links = await client.get_social_links(artist_id=artist_id)
+
+        print("Artist social links:")
+        for platform, url in social_links.items():
+            if url:
+                print(f"- {platform}: {url}")
+
+    except Exception as e:
+        print(f"Error getting social links: {e}")
+    finally:
+        await client.close()
+
+
+async def test_get_genres(artist_id: str) -> None:
+    """Test getting artist genres."""
+    if not artist_id:
+        print("\n=== Test getting genres skipped (ID not found) ===")
+        # Use known Metallica ID directly if not found
+        artist_id = "65f4f0c5-ef9e-490c-aee3-909e7ae6b2ab"
+        print(f"Using Metallica ID: {artist_id}")
+
+    print(f"\n=== Test getting genres for artist {artist_id} ===")
+    client = MusicBrainzClient()
+
+    try:
+        genres = await client.get_genres(artist_id=artist_id)
+
+        print(f"Found genres: {len(genres)}")
+        if genres:
+            print("Genres:")
+            for genre in genres:
+                print(f"- {genre}")
+
+    except Exception as e:
+        print(f"Error getting genres: {e}")
+    finally:
+        await client.close()
+
+
+async def test_search_artists(artist_name: str) -> None:
+    """Test searching for artists by name."""
+    print(f"\n=== Test searching for artists: {artist_name} ===")
+    client = MusicBrainzClient()
+
+    try:
+        result = await client.search_artists(artist_name, limit=5)
+
+        if result.get("artists"):
+            print(f"Found artists: {len(result['artists'])}")
+            for artist in result["artists"][:5]:  # Show at most 5 results
+                print(
+                    f"Artist: {artist.get('name', 'Unknown')} (MBID: {artist.get('id', 'Unknown')})",
+                )
+
+            # Print full first result for inspection
+            if result.get("artists"):
+                print("\nFirst result details:")
+                first_artist = result["artists"][0]
+                print(f"Title: {first_artist.get('name')}")
+                print(f"ID: {first_artist.get('id')}")
+                print(f"Country: {first_artist.get('country', 'Unknown')}")
+                print(f"Type: {first_artist.get('type', 'Unknown')}")
+                if "life-span" in first_artist:
+                    print(
+                        f"Activity period: {first_artist['life-span'].get('begin', 'Unknown')} - {first_artist['life-span'].get('end', 'н.в.')}",
+                    )
+        else:
+            print(f"Artists not found for query '{artist_name}'")
+
+    except Exception as e:
+        print(f"Error searching for artists: {e}")
+    finally:
+        await client.close()
+
+
+async def run_all_tests() -> None:
+    """Run all tests."""
+    release_id, artist_id = await test_search_releases()
+    await test_get_release(release_id)
+    await test_get_social_links(artist_id)
+    await test_get_genres(artist_id or "65f4f0c5-ef9e-490c-aee3-909e7ae6b2ab")
+    await test_search_artists("Metallica")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_all_tests())
+    except KeyboardInterrupt:
+        print("\nTesting interrupted by user")
+        sys.exit(0)

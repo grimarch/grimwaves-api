@@ -1,0 +1,64 @@
+# Development Traefik configuration for GrimWaves API
+# This configuration is used for local development with self-signed certificates
+
+# Logging configuration
+log:
+  level: DEBUG  # More verbose logging for development
+  format: common
+  filePath: /etc/traefik/logs/traefik.log
+  maxSize: 10
+  maxAge: 3
+  maxBackups: 7
+
+# Access logs for debugging
+accessLog:
+  filePath: /etc/traefik/logs/access.log
+  bufferingSize: 100
+  fields:
+    defaultMode: keep
+
+# Define entrypoints (ports)
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+    http:
+      tls: {}
+  dashboard:
+    address: ":8081"
+
+# Enable dashboard
+api:
+  dashboard: true
+  insecure: true  # Set to true for testing
+
+# Configure providers (where Traefik gets its dynamic configuration)
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false  # Do not expose containers by default
+    network: grimwaves-network  # Use the same network as the containers
+    watch: true  # Watch for changes
+  file:
+    directory: "/etc/traefik/config"
+    watch: true  # Watch for changes
+
+# TLS configuration for development
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: "/etc/traefik/config/certs/local-cert.pem"
+        keyFile: "/etc/traefik/config/certs/local-key.pem"
+  certificates:
+    - certFile: "/etc/traefik/config/certs/local-cert.pem"
+      keyFile: "/etc/traefik/config/certs/local-key.pem"
+      stores:
+        - default

@@ -1,0 +1,46 @@
+# Middlewares configuration for Traefik
+# These middleware configurations provide security and functionality enhancements
+
+http:
+  middlewares:
+    # Redirect HTTP to HTTPS
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+    # Add security headers to all responses
+    secureHeaders:
+      headers:
+        frameDeny: true
+        browserXssFilter: true
+        contentTypeNosniff: true
+        forceSTSHeader: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+        customFrameOptionsValue: "SAMEORIGIN"
+        contentSecurityPolicy: "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+
+    # Basic authentication for admin areas
+    auth:
+      basicAuth:
+        users:
+          - "admin:$apr1$ruca84Hq$mbjdMZBAG.KWn7vfN/SNK/" # Password: grimwaves
+          # You can generate more users with: htpasswd -nb username password
+
+    # Rate limiting middleware
+    rateLimit:
+      rateLimit:
+        average: 100
+        burst: 50
+
+    # gzip compression
+    compress:
+      compress: {}
+
+    # Add retry mechanism for failed requests
+    retry:
+      retry:
+        attempts: 3
+        initialInterval: "100ms" 

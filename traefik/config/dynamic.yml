@@ -1,0 +1,33 @@
+# Dynamic configuration for Traefik
+# This file contains configurations that can be loaded without restarting Traefik
+
+# HTTP error pages configuration
+http:
+  routers:
+    # Error pages router
+    error-pages:
+      rule: "HostRegexp(`{host:.+}`)"
+      priority: 1
+      service: error-pages
+      entryPoints:
+        - web
+        - websecure
+      middlewares:
+        - error-pages
+
+  middlewares:
+    # Error pages middleware
+    error-pages:
+      errors:
+        status:
+          - "400-499"
+          - "500-599"
+        service: error-pages
+        query: "/{status}.html"
+
+  services:
+    # Serve static error pages
+    error-pages:
+      loadBalancer:
+        servers:
+          - url: "http://api:8000/error/{status}" 

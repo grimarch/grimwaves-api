@@ -1,0 +1,7 @@
+scan:
+  skip-dirs:
+    - "backups"
+  skip-files:
+    - "**/*.log"
+    - "**/*.md"
+    - "**/*.txt"
