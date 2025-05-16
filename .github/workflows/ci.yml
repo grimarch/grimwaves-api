@@ -203,6 +203,9 @@ jobs:
         run: |
           echo "127.0.0.1 api.grimwaves.local traefik.grimwaves.local grimwaves.local" | sudo tee -a /etc/hosts
           echo "127.0.0.1 health.local" | sudo tee -a /etc/hosts
+      
+      - name: Ensure Vault Agent token directory exists
+        run: mkdir -p vault-agent/token
 
       - name: Create reports directory for E2E tests
         run: mkdir -p reports
@@ -216,7 +219,7 @@ jobs:
           timeout=120 # Total wait time in seconds (e.g., 2 minutes)
           interval=5  # Interval between checks
           elapsed=0
-          until curl --output /dev/null --silent --head --fail --insecure http://127.0.0.1:8000/health; do
+          until curl --output /dev/null --silent --fail --insecure https://api.grimwaves.local/health; do
             if [ $elapsed -ge $timeout ]; then
               echo "Timeout waiting for API!"
               docker compose logs
