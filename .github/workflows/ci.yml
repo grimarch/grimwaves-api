@@ -216,7 +216,8 @@ jobs:
           format: 'template'
           template: '@/contrib/sarif.tpl'
           output: 'trivy-results.sarif'
-          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          severity: 'HIGH,CRITICAL' # Fail on HIGH or CRITICAL vulnerabilities
+          exit-code: '1' # Exit with code 1 if vulnerabilities of specified severity are found
           vuln-type: 'os,library'
           ignore-unfixed: true # Игнорировать уязвимости, для которых нет исправления
 
