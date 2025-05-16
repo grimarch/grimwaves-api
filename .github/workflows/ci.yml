@@ -199,6 +199,11 @@ jobs:
         # Assuming e2e tests might need dev dependencies
         run: poetry install --no-interaction
 
+      - name: Update /etc/hosts for local domain resolution
+        run: |
+          echo "127.0.0.1 api.grimwaves.local traefik.grimwaves.local grimwaves.local" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 health.local" | sudo tee -a /etc/hosts
+
       - name: Create reports directory for E2E tests
         run: mkdir -p reports
 
