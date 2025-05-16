@@ -210,6 +210,9 @@ jobs:
       - name: Create reports directory for E2E tests
         run: mkdir -p reports
 
+      - name: Create application logs directory
+        run: mkdir -p logs
+
       - name: Start services for E2E tests
         run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build
 
