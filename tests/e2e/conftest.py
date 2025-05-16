@@ -1,10 +1,12 @@
 import asyncio
+import os
 from collections.abc import AsyncGenerator
 
 import httpx
 import pytest_asyncio
 
-BASE_URL = "https://api.grimwaves.local"  # Или ваш актуальный URL для E2E тестов
+# Read BASE_URL from environment variable or use a default
+BASE_URL = os.getenv("API_BASE_URL", "https://api.grimwaves.local")
 
 
 @pytest_asyncio.fixture(scope="session")
