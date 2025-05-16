@@ -219,7 +219,7 @@ jobs:
           until curl --output /dev/null --silent --head --fail --insecure https://api.grimwaves.local/health; do
             if [ $elapsed -ge $timeout ]; then
               echo "Timeout waiting for API!"
-              docker compose -f docker-compose.e2e.yml logs
+              docker compose logs
               exit 1
             fi
             printf '.'
