@@ -1,6 +1,7 @@
 ---
 services:
   traefik:
+    image: traefik:v3.3
     volumes:
       - ./traefik/traefik.dev.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/config:/etc/traefik/config:ro
