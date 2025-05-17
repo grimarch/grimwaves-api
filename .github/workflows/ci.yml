@@ -204,14 +204,29 @@ jobs:
           echo "127.0.0.1 api.grimwaves.local traefik.grimwaves.local grimwaves.local" | sudo tee -a /etc/hosts
           echo "127.0.0.1 health.local" | sudo tee -a /etc/hosts
       
-      - name: Ensure Vault Agent token directory exists
-        run: mkdir -p vault-agent/token
+      - name: Ensure Vault Agent all directories exists
+        run: mkdir -p vault-agent/{token,rendered,templates,sockets,auth,certs}
+
+      - name: Create Vault Agent templates
+        run: |
+          echo "{{ with secret \"secret/data/grimwaves-api/dev/streaming/spotify\" -}}
+          SPOTIFY_CLIENT_ID=\"{{ .Data.data.client_id }}\"
+          SPOTIFY_CLIENT_SECRET=\"{{ .Data.data.client_secret }}\"
+          {{ end }}
+          {{ with secret \"secret/data/grimwaves-api/dev/config\" -}}
+          CELERY_BROKER_URL=\"{{ .Data.data.CELERY_BROKER_URL }}\"
+          CELERY_RESULT_BACKEND=\"{{ .Data.data.CELERY_RESULT_BACKEND }}\"
+          REDIS_URL=\"{{ .Data.data.REDIS_URL }}\"
+          {{ end }}" > vault-agent/templates/env.tpl
+
+      - name: Print Vault Agent templates
+        run: cat vault-agent/templates/env.tpl
 
       - name: Create reports directory for E2E tests
         run: mkdir -p reports
 
       - name: Create application logs directory
-        run: mkdir -p logs && sudo chown -R runner:runner logs
+        run: mkdir -p grimwaves_api/logs && sudo chown -R runner:runner grimwaves_api/logs
 
       - name: Start services for E2E tests
         run: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
@@ -234,6 +249,9 @@ jobs:
           done
           echo "API is up!"
 
+      - name: Ensure runner owns log files before pytest
+        run: sudo chown -R runner:runner grimwaves_api/logs
+
       - name: Run E2E tests
         run: poetry run pytest tests/e2e --junitxml=reports/junit-e2e.xml
         env:
@@ -250,11 +268,11 @@ jobs:
       
       - name: Docker logs on failure
         if: failure()
-        run: docker compose logs
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs
 
       - name: Stop services
         if: always() # Always run to clean up
-        run: docker compose down
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 
   build_and_push_docker_image:
     name: Build and Push Docker Image
