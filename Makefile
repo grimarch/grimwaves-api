@@ -196,7 +196,12 @@ vault-init: ## Initialize Terraform
 
 vault-apply: ## Apply Terraform configuration
 	@echo "🔑 Applying Terraform configuration..."
-	cd $(TF_DIR)/vault && terraform apply -auto-approve
+	cd $(TF_DIR)/vault && VAULT_SKIP_VERIFY=$(VAULT_SKIP_VERIFY) terraform apply \
+		-var="vault_address=$(VAULT_ADDR)" \
+		-var="vault_token=$(VAULT_TOKEN)" \
+		$(if $(SPOTIFY_CLIENT_ID),-var="spotify_client_id=$(SPOTIFY_CLIENT_ID)") \
+		$(if $(SPOTIFY_CLIENT_SECRET),-var="spotify_client_secret=$(SPOTIFY_CLIENT_SECRET)") \
+		-auto-approve
 
 vault-plan: ## Plan Terraform configuration
 	@echo "🔑 Planning Terraform configuration..."
@@ -247,7 +252,12 @@ vault-token-load: ## Load Vault token from .vault-token
 
 vault-destroy: ## Destroy Terraform configuration
 	@echo "🔑 Destroying Terraform configuration..."
-	cd $(TF_DIR)/vault && terraform destroy -auto-approve	
+	cd $(TF_DIR)/vault && VAULT_SKIP_VERIFY=$(VAULT_SKIP_VERIFY) terraform destroy \
+		-var="vault_address=$(VAULT_ADDR)" \
+		-var="vault_token=$(VAULT_TOKEN)" \
+		$(if $(SPOTIFY_CLIENT_ID),-var="spotify_client_id=$(SPOTIFY_CLIENT_ID)") \
+		$(if $(SPOTIFY_CLIENT_SECRET),-var="spotify_client_secret=$(SPOTIFY_CLIENT_SECRET)") \
+		-auto-approve
 
 vault-destroy-clean: ## Destroy Terraform configuration and clean up	
 	@echo "🔑 Destroying Terraform configuration and cleaning up..."
