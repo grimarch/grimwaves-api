@@ -167,22 +167,24 @@ jobs:
           echo "${{ secrets.VAULT_ROLE_ID }}" > vault-agent/auth/role-id
           echo "${{ secrets.VAULT_SECRET_ID }}" > vault-agent/auth/secret-id
           echo "Vault Agent Role ID and Secret ID files created with correct names."
-          ls -l vault-agent/auth/ # Optional: list files for debugging
+          # ls -l vault-agent/auth/ # Optional: list files for debugging
 
       - name: Start services for E2E tests
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-          VAULT_SKIP_VERIFY: true
         run: |
           docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-          echo "Waiting a few seconds for services to stabilize before checking vault-agent..."
-          sleep 10
-          echo "Contents of /vault-agent/auth/ inside vault-agent container:"
-          docker compose exec vault-agent ls -la /vault-agent/auth/
-          echo "Contents of /vault-agent/config/agent.hcl inside vault-agent container:"
+          
+      # Логи vault-agent могут быть полезны при сбое, но не при успехе
+      - name: Show vault-agent debug info on failure
+        if: failure()
+        run: |
+          echo "---- Debug: Contents of /vault-agent/auth/ inside vault-agent container ----"
+          docker compose exec vault-agent ls -la /vault-agent/auth/ || echo "Failed to list /vault-agent/auth/"
+          echo "---- Debug: Contents of /vault-agent/config/agent.hcl inside vault-agent container ----"
           docker compose exec vault-agent cat /vault-agent/config/agent.hcl || echo "agent.hcl not found or cat failed"
-          echo "Logs from vault-agent after attempting to read credentials:"
-          docker compose logs vault-agent
+          echo "---- Debug: Logs from vault-agent ----"
+          docker compose logs vault-agent || echo "Failed to get vault-agent logs"
 
       - name: Wait for API to be ready
         run: |
