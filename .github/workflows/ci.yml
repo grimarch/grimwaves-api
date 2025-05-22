@@ -133,6 +133,13 @@ jobs:
       - name: Create reports directory
         run: mkdir -p reports
 
+      - name: Prepare logging directory
+        run: |
+          mkdir -p logs
+          chmod 777 logs
+          touch logs/app.log
+          chmod 666 logs/app.log
+
       - name: Run tests with coverage
         run: |
           poetry run pytest \
