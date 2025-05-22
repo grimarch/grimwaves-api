@@ -6,8 +6,8 @@ resource "vault_approle_auth_backend_role" "vault_agent" { # Renamed from grimwa
   token_max_ttl  = 86400   # 24 hours (as in script)
   secret_id_ttl  = 604800  # 7 days (reduced from 30 days)
   # Add CIDR restrictions based on the network Vault server resides in
-  secret_id_bound_cidrs = ["10.1.42.0/24"]
-  token_bound_cidrs     = ["10.1.42.0/24"]
+  secret_id_bound_cidrs = []
+  token_bound_cidrs     = []
   # secret_id_num_uses = 0 # Default is 0 (infinite)
 }
 

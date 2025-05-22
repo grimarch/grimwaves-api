@@ -221,5 +221,5 @@ vault-agent/auth
 vault-agent/rendered
 vault-agent/sockets
 vault-agent/token
-vault-agent/templates
+
 
