@@ -250,8 +250,8 @@ jobs:
           export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
           # Используем пути к файлам, созданным на предыдущем шаге
           export VAULT_TOKEN=$(vault write -tls-skip-verify -field=token auth/approle/login \
-                              role_id=@vault-agent/auth/role_id \
-                              secret_id=@vault-agent/auth/secret_id)
+                              role_id=@vault-agent/auth/role-id \
+                              secret_id=@vault-agent/auth/secret-id)
           echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
           echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
 
