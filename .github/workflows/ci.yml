@@ -207,12 +207,12 @@ jobs:
       - name: Ensure Vault Agent all directories exists
         run: mkdir -p vault-agent/{token,rendered,templates,sockets,auth,certs}
 
-      - name: Prepare logging directory
+      - name: Set up Vault Agent credentials
         run: |
-          mkdir -p logs
-          chmod 777 logs
-          touch logs/app.log
-          chmod 666 logs/app.log
+          echo "${{ secrets.VAULT_ROLE_ID }}" > vault-agent/auth/role_id
+          echo "${{ secrets.VAULT_SECRET_ID }}" > vault-agent/auth/secret_id
+          echo "Vault Agent Role ID and Secret ID files created."
+          ls -l vault-agent/auth/ # Optional: list files for debugging
 
       - name: Start services for E2E tests
         run: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
@@ -248,11 +248,19 @@ jobs:
         id: vault-token
         run: |
           export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
+          # Используем пути к файлам, созданным на предыдущем шаге
           export VAULT_TOKEN=$(vault write -tls-skip-verify -field=token auth/approle/login \
-                              role_id=${{ secrets.VAULT_ROLE_ID }} \
-                              secret_id=${{ secrets.VAULT_SECRET_ID }})
+                              role_id=@vault-agent/auth/role_id \
+                              secret_id=@vault-agent/auth/secret_id)
           echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
           echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Prepare logging directory
+        run: |
+          mkdir -p logs
+          chmod 777 logs
+          touch logs/app.log
+          chmod 666 logs/app.log
 
       - name: Run E2E Tests
         env:
