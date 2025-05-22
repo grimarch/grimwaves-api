@@ -209,9 +209,9 @@ jobs:
 
       - name: Set up Vault Agent credentials
         run: |
-          echo "${{ secrets.VAULT_ROLE_ID }}" > vault-agent/auth/role_id
-          echo "${{ secrets.VAULT_SECRET_ID }}" > vault-agent/auth/secret_id
-          echo "Vault Agent Role ID and Secret ID files created."
+          echo "${{ secrets.VAULT_ROLE_ID }}" > vault-agent/auth/role-id
+          echo "${{ secrets.VAULT_SECRET_ID }}" > vault-agent/auth/secret-id
+          echo "Vault Agent Role ID and Secret ID files created with correct names."
           ls -l vault-agent/auth/ # Optional: list files for debugging
 
       - name: Start services for E2E tests
