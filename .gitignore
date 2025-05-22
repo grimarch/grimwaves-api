@@ -175,6 +175,7 @@ cython_debug/
 .cursor
 .cursorignore
 backups
+docs
 
 # Ignore private age keys
 **/age-key.txt
@@ -215,6 +216,8 @@ backups
 
 # Traefik
 traefik/logs/
+logs
+*.tar.zst
 
 # Vault
 vault-agent/auth
