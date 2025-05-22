@@ -2,7 +2,7 @@ VAULT_TOKEN_FILE ?= ~/.vault-token
 VAULT_ENV_SCRIPT := scripts/load_secrets_from_vault.py
 
 .PHONY: dev prod down down-clean restart-dev restart-prod logs logs-api logs-traefik prune \
-	help vault-init vault-apply vault-plan vault-edit vault-decrypt compose-logs logs-to-file logs-aggregated logs-watch flush-cache vault-check-env vault-test-connection
+	help vault-init vault-apply vault-plan vault-edit vault-decrypt compose-logs logs-to-file logs-aggregated logs-watch flush-cache vault-check-env vault-test-connection vault-get-github-credentials
 
 # ================= Docker Compose ====================
 
@@ -414,3 +414,19 @@ vault-test-connection: vault-check-env ## Test connection to Vault server
 		echo "   Please check your network connection and Vault server status."; \
 		exit 1; \
 	fi
+
+vault-get-github-credentials: ## Получить Role ID и Secret ID для GitHub Actions
+	@echo "🔐 Получение учетных данных для GitHub Actions..."
+	@echo "⚠️ Сохраните эти данные как секреты в GitHub Actions ⚠️"
+	@echo "-------------------------------------------"
+	@echo "VAULT_ADDR: $(VAULT_ADDR)"
+	@echo "VAULT_ROLE_ID: $(VAULT_ROLE_ID)"
+	@echo "-------------------------------------------"
+	@echo "Опции:"
+	@echo "1) Использовать текущий Secret ID (действителен еще $(shell echo $$((604800/86400))) дней):"
+	@echo "VAULT_SECRET_ID: $(VAULT_SECRET_ID)"
+	@echo ""
+	@echo "2) Получить новый Secret ID:"
+	@echo "   make vault-rotate-secret-id && make vault-get-github-credentials"
+	@echo "-------------------------------------------"
+	@echo "✅ Готово! Скопируйте эти значения в GitHub Secrets"
