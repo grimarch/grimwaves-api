@@ -2,7 +2,7 @@ VAULT_TOKEN_FILE ?= ~/.vault-token
 VAULT_ENV_SCRIPT := scripts/load_secrets_from_vault.py
 
 .PHONY: dev prod down down-clean restart-dev restart-prod logs logs-api logs-traefik prune \
-	help vault-init vault-apply vault-plan vault-edit vault-decrypt compose-logs logs-to-file logs-aggregated logs-watch flush-cache
+	help vault-init vault-apply vault-plan vault-edit vault-decrypt compose-logs logs-to-file logs-aggregated logs-watch flush-cache vault-check-env vault-test-connection
 
 # ================= Docker Compose ====================
 
@@ -195,6 +195,7 @@ vault-init: ## Initialize Terraform
 	cd $(TF_DIR)/vault && terraform init
 
 vault-apply: ## Apply Terraform configuration
+	make vault-test-connection
 	@echo "🔑 Applying Terraform configuration..."
 	cd $(TF_DIR)/vault && VAULT_SKIP_VERIFY=$(VAULT_SKIP_VERIFY) terraform apply \
 		-var="vault_address=$(VAULT_ADDR)" \
@@ -242,6 +243,7 @@ vault-login-root: ## Login to Vault using ROOT_TOKEN=<token>
 	vault login $(ROOT_TOKEN)
 
 vault-token-revoke: ## Revoke saved token (⚠️  remove token, be careful)
+	make vault-test-connection
 	@echo "🔑 Revoking saved token..."
 	vault token revoke $$(cat ~/.vault-token)
 	rm -f ~/.vault-token
@@ -251,6 +253,7 @@ vault-token-load: ## Load Vault token from .vault-token
 	vault login $$(cat ~/.vault-token)
 
 vault-destroy: ## Destroy Terraform configuration
+	make vault-test-connection
 	@echo "🔑 Destroying Terraform configuration..."
 	cd $(TF_DIR)/vault && VAULT_SKIP_VERIFY=$(VAULT_SKIP_VERIFY) terraform destroy \
 		-var="vault_address=$(VAULT_ADDR)" \
@@ -260,11 +263,13 @@ vault-destroy: ## Destroy Terraform configuration
 		-auto-approve
 
 vault-destroy-clean: ## Destroy Terraform configuration and clean up	
+	make vault-test-connection
 	@echo "🔑 Destroying Terraform configuration and cleaning up..."
 	make vault-destroy
 	make vault-clean
 
 vault-destroy-clean-all: ## Destroy Terraform configuration and clean up	
+	make vault-test-connection
 	@echo "🔑 Destroying Terraform configuration and cleaning up..."
 	make vault-destroy
 	make vault-clean
@@ -380,3 +385,32 @@ vault-rotate-secret-id: ## Rotate the Vault AppRole Secret ID and restart the ag
 .PHONY: help
 help: ## Display help for available make targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: vault-check-env
+
+vault-check-env: ## Check if required Vault environment variables are set
+	@echo "🔍 Checking required Vault environment variables..."
+	@if [ -z "$(VAULT_ADDR)" ]; then \
+		echo "❌ Error: VAULT_ADDR is not set"; \
+		echo "   Please set it with: export VAULT_ADDR=https://your-vault-server:8200"; \
+		exit 1; \
+	fi
+	@if [ -z "$(VAULT_TOKEN)" ]; then \
+		echo "❌ Error: VAULT_TOKEN is not set"; \
+		echo "   Please set it with: export VAULT_TOKEN=your-token"; \
+		echo "   Or run: vault login"; \
+		exit 1; \
+	fi
+	@echo "✅ All required Vault environment variables are set:"
+	@echo "   VAULT_ADDR = $(VAULT_ADDR)"
+	@echo "   VAULT_TOKEN is set (value hidden for security)"
+
+vault-test-connection: vault-check-env ## Test connection to Vault server
+	@echo "🔍 Testing connection to Vault server at $(VAULT_ADDR)..."
+	@if vault status >/dev/null 2>&1; then \
+		echo "✅ Successfully connected to Vault server"; \
+	else \
+		echo "❌ Failed to connect to Vault server at $(VAULT_ADDR)"; \
+		echo "   Please check your network connection and Vault server status."; \
+		exit 1; \
+	fi
