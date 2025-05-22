@@ -215,7 +215,18 @@ jobs:
           ls -l vault-agent/auth/ # Optional: list files for debugging
 
       - name: Start services for E2E tests
-        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+          echo "Waiting a few seconds for services to stabilize before checking vault-agent..."
+          sleep 10
+          echo "Contents of /vault-agent/auth/ inside vault-agent container:"
+          docker compose exec vault-agent ls -la /vault-agent/auth/
+          echo "Contents of /vault-agent/config/agent.hcl inside vault-agent container:"
+          docker compose exec vault-agent cat /vault-agent/config/agent.hcl || echo "agent.hcl not found or cat failed"
+          echo "Logs from vault-agent after attempting to read credentials:"
+          docker compose logs vault-agent
 
       - name: Wait for API to be ready
         run: |
