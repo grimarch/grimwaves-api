@@ -217,6 +217,7 @@ jobs:
       - name: Start services for E2E tests
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_SKIP_VERIFY: true
         run: |
           docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
           echo "Waiting a few seconds for services to stabilize before checking vault-agent..."
