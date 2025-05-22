@@ -277,7 +277,7 @@ vault-clean: ## Clean up Vault
 		exit 1; \
 	fi; \
 	echo "🧹  Cleaning up Vault configuration..."; \
-	rm -rfv $(TF_DIR)/vault/.terraform $(TF_DIR)/vault/.terraform.lock.hcl $(TF_DIR)/vault/terraform.tfstate*; \
+	rm -rfv $(TF_DIR)/vault/.terraform $(TF_DIR)/vault/.terraform.lock.hcl $(TF_DIR)/vault/terraform.tfstate* $(TF_DIR)/vault/.terraform.tfstate.lock.info; \
 	rm -fv .env
 
 vault-agent-clean: ## Clean up Vault Agent configuration
