@@ -277,8 +277,7 @@ vault-clean: ## Clean up Vault
 		exit 1; \
 	fi; \
 	echo "🧹  Cleaning up Vault configuration..."; \
-	rm -rfv $(TF_DIR)/vault/.terraform $(TF_DIR)/vault/.terraform.lock.hcl $(TF_DIR)/vault/terraform.tfstate* $(TF_DIR)/vault/.terraform.tfstate.lock.info; \
-	rm -fv .env
+	rm -rfv $(TF_DIR)/vault/.terraform $(TF_DIR)/vault/.terraform.lock.hcl $(TF_DIR)/vault/terraform.tfstate* $(TF_DIR)/vault/.terraform.tfstate.lock.info
 
 vault-agent-clean: ## Clean up Vault Agent configuration
 	read -p "⚠️  This will remove all Vault Agent configuration. Are you sure you want to clean up Vault Agent? (y/n): " confirm; \
@@ -291,7 +290,9 @@ vault-agent-clean: ## Clean up Vault Agent configuration
 	rm -fv vault-agent/auth/role-id; \
 	rm -fv vault-agent/auth/secret-id; \
 	rm -fv vault-agent/token/vault-token; \
-	rm -fv vault-agent/sockets/agent.sock;
+	rm -fv vault-agent/sockets/agent.sock; \
+	rm -fv vault-agent/rendered/.env; \
+	rm -fv vault-agent/config/agent.hcl;
 
 
 # Compute
