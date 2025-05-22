@@ -243,9 +243,8 @@ jobs:
       - name: Get Vault Token
         id: vault-token
         run: |
-          export VAULT_TLS_SKIP_VERIFY=true
           export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
-          export VAULT_TOKEN=$(vault write -field=token auth/approle/login \
+          export VAULT_TOKEN=$(vault write -tls-skip-verify -field=token auth/approle/login \
                               role_id=${{ secrets.VAULT_ROLE_ID }} \
                               secret_id=${{ secrets.VAULT_SECRET_ID }})
           echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
@@ -255,7 +254,13 @@ jobs:
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
           VAULT_TOKEN: ${{ steps.vault-token.outputs.token }}
-        run: poetry run pytest tests/e2e -vv -s
+        run: |
+          poetry run pytest \
+            --cov=grimwaves_api \
+            --cov-report=xml:reports/coverage.xml \
+            --cov-report=html:reports/htmlcov \
+            --junitxml=reports/junit-e2e.xml \
+            tests/e2e 
 
       - name: Upload E2E test results (JUnit XML)
         if: always() # Run even if tests fail
