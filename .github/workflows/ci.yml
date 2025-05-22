@@ -207,24 +207,6 @@ jobs:
       - name: Ensure Vault Agent all directories exists
         run: mkdir -p vault-agent/{token,rendered,templates,sockets,auth,certs}
 
-      - name: Create Vault Agent templates
-        run: |
-          echo "{{ with secret \"secret/data/grimwaves-api/dev/streaming/spotify\" -}}
-          SPOTIFY_CLIENT_ID=\"{{ .Data.data.client_id }}\"
-          SPOTIFY_CLIENT_SECRET=\"{{ .Data.data.client_secret }}\"
-          {{ end }}
-          {{ with secret \"secret/data/grimwaves-api/dev/config\" -}}
-          CELERY_BROKER_URL=\"{{ .Data.data.CELERY_BROKER_URL }}\"
-          CELERY_RESULT_BACKEND=\"{{ .Data.data.CELERY_RESULT_BACKEND }}\"
-          REDIS_URL=\"{{ .Data.data.REDIS_URL }}\"
-          {{ end }}" > vault-agent/templates/env.tpl
-
-      - name: Print Vault Agent templates
-        run: cat vault-agent/templates/env.tpl
-
-      - name: Create reports directory for E2E tests
-        run: mkdir -p reports
-
       - name: Create application logs directory
         run: mkdir -p grimwaves_api/logs && sudo chown -R runner:runner grimwaves_api/logs
 
@@ -249,14 +231,30 @@ jobs:
           done
           echo "API is up!"
 
-      - name: Ensure runner owns log files before pytest
-        run: sudo chown -R runner:runner grimwaves_api/logs
+      - name: Create reports directory for E2E tests
+        run: mkdir -p reports && sudo chown -R runner:runner reports
 
-      - name: Run E2E tests
-        run: poetry run pytest tests/e2e --junitxml=reports/junit-e2e.xml
+      - name: Install Vault CLI
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install vault
+
+      - name: Get Vault Token
+        id: vault-token
+        run: |
+          export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
+          export VAULT_TOKEN=$(vault write -field=token auth/approle/login \
+                              role_id=${{ secrets.VAULT_ROLE_ID }} \
+                              secret_id=${{ secrets.VAULT_SECRET_ID }})
+          echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
+          echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Run E2E Tests
         env:
-          API_BASE_URL: "https://api.grimwaves.local"
-          NO_COLOR: "1"
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ steps.vault-token.outputs.token }}
+        run: poetry run pytest tests/e2e -vv -s
 
       - name: Upload E2E test results (JUnit XML)
         if: always() # Run even if tests fail
