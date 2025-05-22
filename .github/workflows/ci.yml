@@ -16,34 +16,12 @@ jobs:
     name: Lint Code
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
-
-      - name: Load cached venv
-        id: cached-poetry-dependencies
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-
-      - name: Install dependencies
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root
-
-      - name: Install project
-        run: poetry install --no-interaction
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
+        # Опционально, если нужны другие версии Python/Poetry:
+        # with:
+        #   python-version: '3.x' 
+        #   poetry-version: '1.x.x'
 
       - name: Run Ruff Linter
         run: poetry run ruff check .
@@ -56,34 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: lint
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
-
-      - name: Load cached venv
-        id: cached-poetry-dependencies
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-
-      - name: Install dependencies
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root
-
-      - name: Install project
-        run: poetry install --no-interaction
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
 
       - name: Check for vulnerabilities (Safety)
         env:
@@ -96,108 +48,96 @@ jobs:
       - name: Scan configuration files (Trivy)
         run: make scan-config
 
-  test:
-    name: Run Tests and Collect Coverage
+  unit_test:
+    name: Run Unit Tests and Collect Coverage
     runs-on: ubuntu-latest
     needs: lint
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
-
-      - name: Load cached venv
-        id: cached-poetry-dependencies
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-
-      - name: Install dependencies
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root
-
-      - name: Install project
-        run: poetry install --no-interaction
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
 
       - name: Create reports directory
         run: mkdir -p reports
 
-      - name: Run tests with coverage
+      - name: Run unit tests with coverage
         run: |
           poetry run pytest \
             --cov=grimwaves_api \
-            --cov-report=xml:reports/coverage.xml \
-            --cov-report=html:reports/htmlcov \
-            --junitxml=reports/junit-tests.xml \
-            tests/unit \
+            --cov-report=xml:reports/unit-coverage.xml \
+            --cov-report=html:reports/unit-htmlcov \
+            --junitxml=reports/unit-junit-tests.xml \
+            tests/unit
+
+      - name: Upload unit test results (JUnit XML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results-junit
+          path: reports/unit-junit-tests.xml
+
+      - name: Upload unit coverage report (XML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage-report-xml
+          path: reports/unit-coverage.xml
+
+      - name: Upload unit coverage report (HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage-report-html
+          path: reports/unit-htmlcov
+
+  integration_test:
+    name: Run Integration Tests and Collect Coverage
+    runs-on: ubuntu-latest
+    needs: lint # For now, will update to depend on unit_test if needed, or run in parallel
+    steps:
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      - name: Run integration tests with coverage
+        run: |
+          poetry run pytest \
+            --cov=grimwaves_api \
+            --cov-append \
+            --cov-report=xml:reports/integration-coverage.xml \
+            --cov-report=html:reports/integration-htmlcov \
+            --junitxml=reports/integration-junit-tests.xml \
             tests/integration --run-integration
 
-      - name: Upload test results (JUnit XML)
+      - name: Upload integration test results (JUnit XML)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-junit
-          path: reports/junit-tests.xml
+          name: integration-test-results-junit
+          path: reports/integration-junit-tests.xml
 
-      - name: Upload coverage report (XML)
+      - name: Upload integration coverage report (XML)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report-xml
-          path: reports/coverage.xml
+          name: integration-coverage-report-xml
+          path: reports/integration-coverage.xml
 
-      - name: Upload coverage report (HTML)
+      - name: Upload integration coverage report (HTML)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report-html
-          path: reports/htmlcov
+          name: integration-coverage-report-html
+          path: reports/integration-htmlcov
 
   e2e_test:
     name: End-to-End Tests
     runs-on: ubuntu-latest
-    needs: test # Depends on unit/integration tests passing
+    needs: [unit_test, integration_test] # Depends on unit/integration tests passing
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
-
-      - name: Load cached venv
-        id: cached-poetry-dependencies
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          # Separate cache key for e2e if dependencies differ, or reuse test cache
-          key: venv-e2e-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-          restore-keys: |
-            venv-e2e-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
-            venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-
-      - name: Install dependencies (including dev for pytest, etc.)
-        # Assuming e2e tests might need dev dependencies
-        run: poetry install --no-interaction
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
 
       - name: Update /etc/hosts for local domain resolution
         run: |
@@ -306,7 +246,7 @@ jobs:
   build_and_push_docker_image:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: [test, e2e_test] # Now depends on both unit/integration and E2E tests
+    needs: [unit_test, integration_test, e2e_test] # Now depends on unit/integration and E2E tests
     permissions: # Добавляем/обновляем permissions для загрузки SARIF
       contents: read
       packages: write
