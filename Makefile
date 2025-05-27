@@ -415,7 +415,7 @@ vault-test-connection: vault-check-env ## Test connection to Vault server
 		exit 1; \
 	fi
 
-vault-get-github-credentials: ## Получить Role ID и Secret ID для GitHub Actions
+vault-get-github-credentials: vault-test-connection ## Получить Role ID и Secret ID для GitHub Actions
 	@echo "🔐 Получение учетных данных для GitHub Actions..."
 	@echo "⚠️ Сохраните эти данные как секреты в GitHub Actions ⚠️"
 	@echo "-------------------------------------------"
@@ -424,7 +424,6 @@ vault-get-github-credentials: ## Получить Role ID и Secret ID для Gi
 	@echo "-------------------------------------------"
 	@echo "Опции:"
 	@echo "1) Использовать текущий Secret ID (действителен еще $(shell echo $$((604800/86400))) дней):"
-	@echo "VAULT_SECRET_ID: $(VAULT_SECRET_ID)"
 	@echo ""
 	@echo "2) Получить новый Secret ID:"
 	@echo "   make vault-rotate-secret-id && make vault-get-github-credentials"
