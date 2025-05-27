@@ -1,0 +1,176 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg-agent
+  - software-properties-common
+  - jq
+  - unzip
+  - git
+
+# Install Docker if not already present
+runcmd:
+  # Create directory structure
+  - mkdir -p /var/app/${project_name}
+  - mkdir -p /var/app/${project_name}/logs
+  - mkdir -p /var/app/${project_name}/data
+  - mkdir -p /var/app/${project_name}/vault-agent/auth
+  - mkdir -p /var/app/${project_name}/vault-agent/token
+  - mkdir -p /var/app/${project_name}/vault-agent/rendered
+  - mkdir -p /var/app/${project_name}/vault-agent/templates
+  - mkdir -p /var/app/${project_name}/vault-agent/sockets
+
+  # Set correct permissions
+  - chown -R 1000:1000 /var/app/${project_name}
+
+  # Mount volume for data
+  - if [ ! -d "/mnt/data" ]; then mkdir -p /mnt/data; fi
+  - mount /dev/disk/by-id/scsi-0DO_Volume_${project_name}-${environment}-data /mnt/data
+  - echo "/dev/disk/by-id/scsi-0DO_Volume_${project_name}-${environment}-data /mnt/data ext4 defaults,nofail,discard 0 0" >> /etc/fstab
+  - mkdir -p /mnt/data/redis
+  - mkdir -p /mnt/data/logs
+  - chown -R 1000:1000 /mnt/data
+
+  # Install Docker if not already installed (docker-20-04 image should have it already)
+  - if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh; fi
+  
+  # Install Docker Compose v2
+  - if ! command -v docker compose &> /dev/null; then
+      mkdir -p ~/.docker/cli-plugins/;
+      curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose;
+      chmod +x ~/.docker/cli-plugins/docker-compose;
+    fi
+
+  # Set up Vault CLI
+  - curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+  - apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+  - apt-get update && apt-get install vault -y
+
+  # Set hostname
+  - hostnamectl set-hostname ${project_name}-${environment}
+
+  # Create deploy user
+  - useradd -m -s /bin/bash deploy
+  - usermod -aG docker deploy
+  - mkdir -p /home/deploy/.ssh
+  - echo 'deploy ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/deploy
+
+  # Set up firewall (basic)
+  - ufw allow ssh
+  - ufw allow http
+  - ufw allow https
+  - ufw --force enable
+
+  # Set environment variables file
+  - |
+    cat > /var/app/${project_name}/.env << EOF
+    ENVIRONMENT=${environment}
+    VAULT_ADDR=https://vault.example.com:8200
+    VAULT_SKIP_VERIFY=true
+    EOF
+
+# Configure the write_files module
+write_files:
+  - path: /var/app/${project_name}/vault-agent/templates/env.tmpl
+    content: |
+      {{ with secret "kv/data/grimwaves/${environment}" }}
+      ENVIRONMENT=${environment}
+      GRIMWAVES_CELERY_BROKER_URL={{ .Data.data.celery_broker_url }}
+      GRIMWAVES_CELERY_RESULT_BACKEND={{ .Data.data.celery_result_backend }}
+      GRIMWAVES_REDIS_URL={{ .Data.data.redis_url }}
+      GRIMWAVES_SPOTIFY_CLIENT_ID={{ .Data.data.spotify_client_id }}
+      GRIMWAVES_SPOTIFY_CLIENT_SECRET={{ .Data.data.spotify_client_secret }}
+      GRIMWAVES_MUSICBRAINZ_CONTACT={{ .Data.data.musicbrainz_contact }}
+      {{ if eq "${environment}" "production" }}
+      DUCKDNS_TOKEN={{ .Data.data.duckdns_token }}
+      DUCKDNS_DOMAIN={{ .Data.data.duckdns_domain }}
+      {{ end }}
+      {{ end }}
+
+  - path: /var/app/${project_name}/vault-agent/config/agent.hcl
+    content: |
+      pid_file = "/var/app/${project_name}/vault-agent/agent.pid"
+      
+      vault {
+        address = "https://vault.example.com:8200"
+        tls_skip_verify = true
+      }
+      
+      auto_auth {
+        method "approle" {
+          mount_path = "auth/grimwaves-approle"
+          config = {
+            role_id_file_path = "/var/app/${project_name}/vault-agent/auth/role-id"
+            secret_id_file_path = "/var/app/${project_name}/vault-agent/auth/secret-id"
+            remove_secret_id_file_after_reading = false
+          }
+        }
+      
+        sink "file" {
+          config = {
+            path = "/var/app/${project_name}/vault-agent/token/vault-token"
+          }
+        }
+      }
+      
+      template {
+        source = "/var/app/${project_name}/vault-agent/templates/env.tmpl"
+        destination = "/var/app/${project_name}/vault-agent/rendered/.env"
+      }
+      
+      listener "tcp" {
+        address = "127.0.0.1:8100"
+        tls_disable = true
+      }
+      
+      cache {
+        use_auto_auth_token = true
+      }
+
+  - path: /var/app/${project_name}/README.md
+    content: |
+      # GrimWaves API - ${environment} Environment
+      
+      This server runs the GrimWaves API in ${environment} mode.
+      
+      ## Important Directories
+      
+      - Application: /var/app/${project_name}
+      - Data Volume: /mnt/data
+      - Logs: /var/app/${project_name}/logs and /mnt/data/logs
+      
+      ## Deployment
+      
+      The application is deployed using Docker Compose. To update:
+      
+      ```bash
+      cd /var/app/${project_name}
+      # Pull new images
+      docker compose pull
+      # Restart services
+      docker compose down
+      docker compose up -d
+      ```
+
+  - path: /var/app/${project_name}/deploy.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+      
+      cd /var/app/${project_name}
+      
+      echo "Pulling latest images..."
+      docker compose pull
+      
+      echo "Stopping services..."
+      docker compose down
+      
+      echo "Starting services with new images..."
+      docker compose up -d
+      
+      echo "Deployment completed successfully!" 

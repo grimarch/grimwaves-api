@@ -1,0 +1,252 @@
+name: Deploy to DigitalOcean
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment for deployment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      tag:
+        description: 'Docker image tag to deploy (default: latest)'
+        required: false
+        default: 'latest'
+        type: string
+
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  prepare:
+    name: Prepare for Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      tag: ${{ steps.set-tag.outputs.tag }}
+    steps:
+      - name: Set environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set image tag
+        id: set-tag
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.tag }}" != "latest" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            # For automated pushes to master, use the commit SHA
+            echo "tag=sha-${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+  terraform:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: prepare
+    environment: ${{ needs.prepare.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Vault CLI
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install vault
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: Get Vault Token
+        id: vault-token
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+          VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+        run: |
+          # Create temporary files for role_id and secret_id
+          echo "$VAULT_ROLE_ID" > role_id.tmp
+          echo "$VAULT_SECRET_ID" > secret_id.tmp
+          
+          # Get token from Vault
+          VAULT_TOKEN=$(vault write -tls-skip-verify -field=token auth/approle/login \
+                          role_id=@role_id.tmp \
+                          secret_id=@secret_id.tmp)
+          
+          # Remove temporary files
+          rm role_id.tmp secret_id.tmp
+          
+          # Set output and env var
+          echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
+          echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
+
+      - name: Get DigitalOcean API Token from Vault
+        id: do-token
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+        run: |
+          DIGITALOCEAN_TOKEN=$(vault kv get -tls-skip-verify -field=api_token kv/digitalocean)
+          echo "token=$DIGITALOCEAN_TOKEN" >> $GITHUB_OUTPUT
+          echo "DO_TOKEN=$DIGITALOCEAN_TOKEN" >> $GITHUB_ENV
+
+      - name: Get SSH Key from Vault
+        id: ssh-key
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+        run: |
+          SSH_KEY_FINGERPRINT=$(vault kv get -tls-skip-verify -field=ssh_key_fingerprint kv/digitalocean)
+          echo "fingerprint=$SSH_KEY_FINGERPRINT" >> $GITHUB_OUTPUT
+
+      - name: Initialize Terraform
+        working-directory: .cicd/terraform/compute
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: .cicd/terraform/compute
+        run: |
+          terraform plan \
+            -var="do_token=${{ steps.do-token.outputs.token }}" \
+            -var="ssh_key_fingerprint=${{ steps.ssh-key.outputs.fingerprint }}" \
+            -var="environment=${{ needs.prepare.outputs.environment }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: .cicd/terraform/compute
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Outputs
+        id: terraform-outputs
+        working-directory: .cicd/terraform/compute
+        run: |
+          echo "droplet_ip=$(terraform output -raw droplet_ipv4)" >> $GITHUB_OUTPUT
+          echo "app_url=$(terraform output -raw app_url)" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy Application
+    runs-on: ubuntu-latest
+    needs: [prepare, terraform]
+    environment: ${{ needs.prepare.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get SSH Key from Vault
+        id: ssh-key
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        run: |
+          # Install Vault CLI
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install vault
+          
+          # Get SSH private key from Vault
+          mkdir -p ~/.ssh
+          vault kv get -tls-skip-verify -field=private_key kv/ssh > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          
+          # Set known hosts
+          touch ~/.ssh/known_hosts
+          echo "${{ needs.terraform.outputs.droplet_ip }} $(vault kv get -tls-skip-verify -field=known_hosts kv/ssh)" >> ~/.ssh/known_hosts
+
+      - name: Copy Docker Compose files
+        run: |
+          # Prepare docker-compose files
+          if [ "${{ needs.prepare.outputs.environment }}" == "production" ]; then
+            TARGET_COMPOSE="docker-compose.yml docker-compose.prod.yml"
+          else
+            TARGET_COMPOSE="docker-compose.yml docker-compose.dev.yml"
+          fi
+          
+          # Copy files to remote server
+          scp $TARGET_COMPOSE deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+
+      - name: Configure Vault Agent
+        run: |
+          # Create role_id and secret_id files
+          echo "${{ secrets.VAULT_ROLE_ID }}" > role_id.tmp
+          echo "${{ secrets.VAULT_SECRET_ID }}" > secret_id.tmp
+          
+          # Copy to server
+          scp role_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/role-id
+          scp secret_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/secret-id
+          
+          # Clean up
+          rm role_id.tmp secret_id.tmp
+
+      - name: Run Deployment
+        run: |
+          # Create .env file with the image tag
+          echo "DOCKER_TAG=${{ needs.prepare.outputs.tag }}" > .env.tmp
+          scp .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env.docker
+          
+          # Run deployment script
+          ssh deploy@${{ needs.terraform.outputs.droplet_ip }} 'cd /var/app/grimwaves && sudo ./deploy.sh'
+          
+          # Clean up
+          rm .env.tmp
+
+      - name: Verify Deployment
+        run: |
+          # Wait for services to start
+          echo "Waiting for services to start..."
+          sleep 30
+          
+          # Check if the service is responding
+          curl -sSf --retry 5 --retry-delay 10 "${{ needs.terraform.outputs.app_url }}/health" || (echo "Service health check failed!" && exit 1)
+          
+          echo "Deployment completed successfully!"
+
+  notify:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [prepare, terraform, deploy]
+    if: always()
+    steps:
+      - name: Deployment Status
+        id: status
+        run: |
+          if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=✅ Deployment to ${{ needs.prepare.outputs.environment }} succeeded!" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=❌ Deployment to ${{ needs.prepare.outputs.environment }} failed!" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Email Notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: ${{ steps.status.outputs.message }}
+          body: |
+            Deployment Status: ${{ steps.status.outputs.status }}
+            Environment: ${{ needs.prepare.outputs.environment }}
+            Image Tag: ${{ needs.prepare.outputs.tag }}
+            Application URL: ${{ needs.terraform.outputs.app_url }}
+            
+            See details at: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          to: ${{ secrets.MAIL_RECIPIENT }}
+          from: GrimWaves CI/CD <${{ secrets.MAIL_USERNAME }}> 
