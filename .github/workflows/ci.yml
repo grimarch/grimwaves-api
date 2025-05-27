@@ -19,31 +19,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
-
-      - name: Load cached venv
-        id: cached-poetry-dependencies
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-
-      - name: Install dependencies
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root
-
-      - name: Install project
-        run: poetry install --no-interaction
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
+        # Опционально, если нужны другие версии Python/Poetry:
+        # with:
+        #   python-version: '3.x' 
+        #   poetry-version: '1.x.x'
 
       - name: Run Ruff Linter
         run: poetry run ruff check .
@@ -59,31 +40,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
-
-      - name: Load cached venv
-        id: cached-poetry-dependencies
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-
-      - name: Install dependencies
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root
-
-      - name: Install project
-        run: poetry install --no-interaction
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
 
       - name: Check for vulnerabilities (Safety)
         env:
@@ -96,78 +54,217 @@ jobs:
       - name: Scan configuration files (Trivy)
         run: make scan-config
 
-  test:
-    name: Run Tests and Collect Coverage
+  unit_test:
+    name: Unit Tests
     runs-on: ubuntu-latest
     needs: lint
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
-
-      - name: Load cached venv
-        id: cached-poetry-dependencies
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-
-      - name: Install dependencies
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root
-
-      - name: Install project
-        run: poetry install --no-interaction
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
 
       - name: Create reports directory
         run: mkdir -p reports
 
-      - name: Run tests with coverage
+      - name: Run unit tests with coverage
+        run: |
+          poetry run pytest \
+            --cov=grimwaves_api \
+            --cov-report=xml:reports/unit-coverage.xml \
+            --cov-report=html:reports/unit-htmlcov \
+            --junitxml=reports/unit-junit-tests.xml \
+            tests/unit
+
+      - name: Upload unit test results (JUnit XML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results-junit
+          path: reports/unit-junit-tests.xml
+
+      - name: Upload unit coverage report (XML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage-report-xml
+          path: reports/unit-coverage.xml
+
+      - name: Upload unit coverage report (HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage-report-html
+          path: reports/unit-htmlcov
+
+  integration_test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: lint # For now, will update to depend on unit_test if needed, or run in parallel
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      - name: Run integration tests with coverage
+        run: |
+          poetry run pytest \
+            --cov=grimwaves_api \
+            --cov-append \
+            --cov-report=xml:reports/integration-coverage.xml \
+            --cov-report=html:reports/integration-htmlcov \
+            --junitxml=reports/integration-junit-tests.xml \
+            tests/integration --run-integration
+
+      - name: Upload integration test results (JUnit XML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results-junit
+          path: reports/integration-junit-tests.xml
+
+      - name: Upload integration coverage report (XML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-coverage-report-xml
+          path: reports/integration-coverage.xml
+
+      - name: Upload integration coverage report (HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-coverage-report-html
+          path: reports/integration-htmlcov
+
+  e2e_test:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    needs: [unit_test, integration_test] # Depends on unit/integration tests passing
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
+
+      - name: Update /etc/hosts for local domain resolution
+        run: |
+          echo "127.0.0.1 api.grimwaves.local traefik.grimwaves.local grimwaves.local" | sudo tee -a /etc/hosts
+          echo "127.0.0.1 health.local" | sudo tee -a /etc/hosts
+      
+      - name: Ensure Vault Agent all directories exists
+        run: mkdir -p vault-agent/{token,rendered,templates,sockets,auth,certs}
+
+      - name: Set up Vault Agent credentials
+        run: |
+          echo "${{ secrets.VAULT_ROLE_ID }}" > vault-agent/auth/role-id
+          echo "${{ secrets.VAULT_SECRET_ID }}" > vault-agent/auth/secret-id
+          echo "Vault Agent Role ID and Secret ID files created with correct names."
+          # ls -l vault-agent/auth/ # Optional: list files for debugging
+
+      - name: Start services for E2E tests
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_SKIP_VERIFY: "true"
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+          
+      # Логи vault-agent могут быть полезны при сбое, но не при успехе
+      - name: Show vault-agent debug info on failure
+        if: failure()
+        run: |
+          echo "---- Debug: Contents of /vault-agent/auth/ inside vault-agent container ----"
+          docker compose exec vault-agent ls -la /vault-agent/auth/ || echo "Failed to list /vault-agent/auth/"
+          echo "---- Debug: Contents of /vault-agent/config/agent.hcl inside vault-agent container ----"
+          docker compose exec vault-agent cat /vault-agent/config/agent.hcl || echo "agent.hcl not found or cat failed"
+          echo "---- Debug: Logs from vault-agent ----"
+          docker compose logs vault-agent || echo "Failed to get vault-agent logs"
+
+      - name: Wait for API to be ready
+        run: |
+          echo "Waiting for API at https://api.grimwaves.local/health ..."
+          timeout=120 # Total wait time in seconds (e.g., 2 minutes)
+          interval=5  # Interval between checks
+          elapsed=0
+          until curl --output /dev/null --silent --fail --insecure https://api.grimwaves.local/health; do
+            if [ $elapsed -ge $timeout ]; then
+              echo "Timeout waiting for API!"
+              docker compose logs
+              exit 1
+            fi
+            printf '.'
+            sleep $interval
+            elapsed=$(($elapsed + $interval))
+          done
+          echo "API is up!"
+
+      - name: Create reports directory for E2E tests
+        run: mkdir -p reports && sudo chown -R runner:runner reports
+
+      - name: Install Vault CLI
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install vault
+
+      - name: Get Vault Token
+        id: vault-token
+        run: |
+          export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
+          # Используем пути к файлам, созданным на предыдущем шаге
+          export VAULT_TOKEN=$(vault write -tls-skip-verify -field=token auth/approle/login \
+                              role_id=@vault-agent/auth/role-id \
+                              secret_id=@vault-agent/auth/secret-id)
+          echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
+          echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Prepare logging directory
+        run: |
+          mkdir -p logs
+          sudo chmod 777 logs
+          sudo touch logs/app.log
+          sudo chmod 666 logs/app.log
+          sudo chown -R runner:runner logs
+
+      - name: Run E2E Tests
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ steps.vault-token.outputs.token }}
         run: |
           poetry run pytest \
             --cov=grimwaves_api \
             --cov-report=xml:reports/coverage.xml \
             --cov-report=html:reports/htmlcov \
-            --junitxml=reports/junit-tests.xml \
-            tests/unit \
-            tests/integration --run-integration
+            --junitxml=reports/junit-e2e.xml \
+            tests/e2e 
 
-      - name: Upload test results (JUnit XML)
-        if: always()
+      - name: Upload E2E test results (JUnit XML)
+        if: always() # Run even if tests fail
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-junit
-          path: reports/junit-tests.xml
+          name: e2e-test-results-junit
+          path: reports/junit-e2e.xml # Assuming E2E tests output to this file
+          retention-days: 7
+      
+      - name: Docker logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs
 
-      - name: Upload coverage report (XML)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report-xml
-          path: reports/coverage.xml
-
-      - name: Upload coverage report (HTML)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report-html
-          path: reports/htmlcov
+      - name: Stop services
+        if: always() # Always run to clean up
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 
   build_and_push_docker_image:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: test
+    needs: [unit_test, integration_test, e2e_test] # Now depends on unit/integration and E2E tests
     permissions: # Добавляем/обновляем permissions для загрузки SARIF
       contents: read
       packages: write

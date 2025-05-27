@@ -1,0 +1,51 @@
+name: 'Setup Python and Poetry Environment'
+description: 'Sets up Python, Poetry, caches dependencies, and installs them. Assumes code is already checked out.'
+
+inputs:
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.13'
+  poetry-version:
+    description: 'Poetry version to use'
+    required: false
+    default: 'latest' # Или укажите конкретную версию, если нужно
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: ${{ inputs.poetry-version }}
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+        installer-parallel: true
+
+    - name: Load cached venv
+      id: cached-poetry-dependencies
+      uses: actions/cache@v4
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ inputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+
+    - name: Install dependencies (cached)
+      if: steps.cached-poetry-dependencies.outputs.cache-hit == 'true'
+      shell: bash
+      run: poetry install --no-interaction --no-root --sync
+
+    - name: Install dependencies (no cache)
+      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+      shell: bash
+      run: poetry install --no-interaction --no-root
+
+    # Этот шаг может быть опциональным или частью другого шага, 
+    # в зависимости от того, все ли job'ы требуют полной установки проекта
+    - name: Install project (if needed by subsequent steps)
+      shell: bash
+      run: poetry install --no-interaction 

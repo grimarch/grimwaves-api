@@ -18,8 +18,8 @@ auto_auth {
 }
 
 vault {
-  address = "https://vault-docker-lab1.vault-docker-lab.lan:8200"
-  tls_skip_verify = false
+  address = "${VAULT_ADDR}"
+  tls_skip_verify = ${VAULT_SKIP_VERIFY}
   ca_cert = "/vault-agent/certs/vault_docker_lab_ca.pem"
 }
 
@@ -29,7 +29,6 @@ listener "unix" {
   tls_disable = true
 }
 
-# Шаблон для секретов
 template {
   source = "/vault-agent/templates/env.tpl"
   destination = "/vault-agent/rendered/.env"

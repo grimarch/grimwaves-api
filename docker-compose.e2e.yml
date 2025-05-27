@@ -1,0 +1,71 @@
+---
+services:
+  traefik:
+    image: traefik:v3.3
+    volumes:
+      - ./traefik/traefik.dev.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/config:/etc/traefik/config:ro
+      - ./traefik/config/certs:/etc/traefik/certs:ro
+    extra_hosts:
+      - "api.grimwaves.local:127.0.0.1"
+      - "grimwaves.local:127.0.0.1"
+      - "health.local:127.0.0.1"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.grimwaves.local`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.services.api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.tls.domains[0].main=api.grimwaves.local"
+      - "traefik.http.routers.api.tls.domains[0].sans=grimwaves.local,*.grimwaves.local"
+      - "traefik.http.routers.api-http.rule=Host(`api.grimwaves.local`)"
+      - "traefik.http.routers.api-http.entrypoints=web"
+      - "traefik.http.routers.api-http.service=api@docker"
+    environment:
+      - GRIMWAVES_CELERY_BROKER_URL=redis://redis:6379/0
+      - GRIMWAVES_CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GRIMWAVES_REDIS_URL=redis://redis:6379/1
+    # It's good practice to expose ports directly for E2E tests if not relying on Traefik
+    # especially if Traefik setup within CI is complex or adds flakiness.
+    # For now, we assume tests will target api.grimwaves.local via Traefik.
+    # If direct access is needed:
+    # ports:
+    #  - "8000:8000" # Expose API port directly
+
+  redis:
+    image: redis:7.4.3-alpine
+    container_name: grimwaves-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A grimwaves_api.core.celery_app worker --loglevel=info
+    volumes:
+      - ./:/app # Mounting current directory for live code changes (useful for dev, maybe less for CI e2e)
+                # For CI E2E, it's better if the image is self-contained from the build step.
+                # However, since 'api' and 'celery-worker' both build from Dockerfile,
+                # this ensures they use the checked-out code.
+      - ./logs:/app/logs
+      - ./vault-agent/rendered:/vault-agent/rendered:ro
+    environment:
+      - SETTINGS_ENV_FILE=/vault-agent/rendered/.env
+      - GRIMWAVES_CELERY_BROKER_URL=redis://redis:6379/0
+      - GRIMWAVES_CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GRIMWAVES_REDIS_URL=redis://redis:6379/1
+    depends_on:
+      - redis
+
+volumes:
+  redis-data:
+    # Empty for CI to ensure clean state, or remove if persistence isn't needed for E2E 

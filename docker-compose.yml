@@ -6,12 +6,13 @@ services:
     container_name: vault-agent
     restart: unless-stopped
     environment:
-      - VAULT_ADDR=https://vault-docker-lab1.vault-docker-lab.lan:8200
+      - VAULT_ADDR=${VAULT_ADDR:-vault-docker-lab1.vault-docker-lab.lan:8200}
       - VAULT_ROLE_ID
       - VAULT_WRAPPED_SECRET_ID
       - VAULT_SECRET_ID
       - VAULT_PROJECT_NAME=${VAULT_PROJECT_NAME:-learn-vault-lab}
       - VAULT_ROLE_NAME=${VAULT_PROJECT_NAME:-learn-vault-lab}-vault-agent
+      - VAULT_SKIP_VERIFY=${VAULT_SKIP_VERIFY:-false}
     volumes:
       - ./vault-agent:/vault-agent
     networks:
