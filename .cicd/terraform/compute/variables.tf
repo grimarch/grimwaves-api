@@ -67,3 +67,9 @@ variable "blue_green_deployment" {
     production = true
   }
 }
+
+variable "ssh_allowed_ips" {
+  description = "List of IP addresses allowed to SSH into the servers"
+  type        = list(string)
+  default     = ["0.0.0.0/0"] # Should be restricted in production
+}

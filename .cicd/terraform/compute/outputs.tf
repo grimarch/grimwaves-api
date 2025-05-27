@@ -4,7 +4,7 @@ output "droplet_id" {
 }
 
 output "droplet_ipv4" {
-  description = "Public IPv4 address of the droplet"
+  description = "IPv4 address of the droplet"
   value       = digitalocean_droplet.app.ipv4_address
 }
 
@@ -24,10 +24,8 @@ output "project_id" {
 }
 
 output "app_url" {
-  description = "URL to access the application"
-  value = var.environment == "production" ? (
-    length(digitalocean_loadbalancer.public) > 0 ? "https://api.${var.domain_name}" : "https://${digitalocean_droplet.app.ipv4_address}"
-  ) : "https://api-staging.${var.domain_name}"
+  description = "Application URL"
+  value       = var.environment == "production" ? "https://api.${var.domain_name}" : "https://api-staging.${var.domain_name}"
 }
 
 output "active_color" {
@@ -50,4 +48,24 @@ output "deployment_info" {
     backups_enabled  = lookup(var.enable_backups, var.environment, false)
     domain           = var.domain_name
   }
+}
+
+output "load_balancer_id" {
+  value = var.environment == "production" && lookup(var.blue_green_deployment, var.environment, false) ? digitalocean_loadbalancer.public[0].id : null
+  description = "Load balancer ID for blue/green deployment"
+}
+
+output "load_balancer_ip" {
+  value = var.environment == "production" && lookup(var.blue_green_deployment, var.environment, false) ? digitalocean_loadbalancer.public[0].ip : null
+  description = "Load balancer IP address"
+}
+
+output "active_droplet_ip" {
+  value = digitalocean_droplet.app.ipv4_address
+  description = "IP address of the active droplet"
+}
+
+output "inactive_droplet_ip" {
+  value = var.environment == "production" && lookup(var.blue_green_deployment, var.environment, false) ? digitalocean_droplet.app_inactive[0].ipv4_address : null
+  description = "IP address of the inactive droplet (blue/green)"
 } 

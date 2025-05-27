@@ -42,6 +42,7 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
           else
+            # Auto-deploy only to staging environment on push to master
             echo "environment=staging" >> $GITHUB_OUTPUT
           fi
 
@@ -59,6 +60,7 @@ jobs:
     name: Deploy Infrastructure
     runs-on: ubuntu-latest
     needs: prepare
+    # Use GitHub Environment - this enables environment-specific secrets and protection rules
     environment: ${{ needs.prepare.outputs.environment }}
     steps:
       - name: Checkout code
@@ -121,6 +123,10 @@ jobs:
 
       - name: Terraform Plan
         working-directory: .cicd/terraform/compute
+        env:
+          # Use environment variables from GitHub Environment if available
+          TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || 'grimwaves.com' }}
+          TF_VAR_blue_green_enabled: ${{ vars.BLUE_GREEN_DEPLOYMENT || 'false' }}
         run: |
           terraform plan \
             -var="do_token=${{ steps.do-token.outputs.token }}" \
@@ -143,22 +149,24 @@ jobs:
     name: Deploy Application
     runs-on: ubuntu-latest
     needs: [prepare, terraform]
+    # Use GitHub Environment - this enables environment-specific secrets and protection rules
     environment: ${{ needs.prepare.outputs.environment }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install Vault CLI
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install vault
+
       - name: Get SSH Key from Vault
         id: ssh-key
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+          VAULT_TOKEN: ${{ needs.terraform.outputs.token }}
         run: |
-          # Install Vault CLI
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-          sudo apt-get update && sudo apt-get install vault
-          
           # Get SSH private key from Vault
           mkdir -p ~/.ssh
           vault kv get -tls-skip-verify -field=private_key kv/ssh > ~/.ssh/id_rsa
@@ -194,9 +202,19 @@ jobs:
           rm role_id.tmp secret_id.tmp
 
       - name: Run Deployment
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
-          # Create .env file with the image tag
-          echo "DOCKER_TAG=${{ needs.prepare.outputs.tag }}" > .env.tmp
+          # Create .env file with the image tag and environment-specific variables
+          {
+            echo "DOCKER_TAG=${{ needs.prepare.outputs.tag }}"
+            echo "ENVIRONMENT=$ENVIRONMENT"
+            # Add any environment-specific variables from GitHub Environment
+            if [ -n "${{ vars.ADDITIONAL_ENV_VARS }}" ]; then
+              echo "${{ vars.ADDITIONAL_ENV_VARS }}"
+            fi
+          } > .env.tmp
+          
           scp .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env.docker
           
           # Run deployment script
@@ -221,6 +239,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, terraform, deploy]
     if: always()
+    # Note: This job does not use an environment context but still accesses environment-specific secrets
     steps:
       - name: Deployment Status
         id: status
@@ -249,4 +268,39 @@ jobs:
             
             See details at: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           to: ${{ secrets.MAIL_RECIPIENT }}
-          from: GrimWaves CI/CD <${{ secrets.MAIL_USERNAME }}> 
+          from: GrimWaves CI/CD <${{ secrets.MAIL_USERNAME }}>
+
+  e2e_tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: deploy
+    environment: ${{ needs.prepare.outputs.environment }}
+    # Only run E2E tests for staging environment
+    if: needs.prepare.outputs.environment == 'staging'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: ./.github/actions/setup-python-poetry
+        
+      - name: Wait for deployment to stabilize
+        run: |
+          echo "Waiting for 30 seconds to ensure deployment is stable..."
+          sleep 30
+        
+      - name: Run E2E Tests
+        env:
+          E2E_TEST_URL: https://api-staging.grimwaves.com
+        run: |
+          poetry run pytest tests/e2e/ -v
+          
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: |
+            .pytest_cache/
+            pytest-report.xml
+          retention-days: 7 
