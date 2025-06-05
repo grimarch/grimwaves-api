@@ -214,6 +214,13 @@ jobs:
           sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
           sudo apt-get update && sudo apt-get install vault
 
+      - name: Setup Vault DNS resolution
+        run: |
+          # Add Vault domain to /etc/hosts for DNS resolution in CI
+          VAULT_IP="${{ secrets.VAULT_SERVER_IP }}"
+          echo "$VAULT_IP vault-docker-lab1.vault-docker-lab.lan" | sudo tee -a /etc/hosts
+          echo "✅ Added Vault domain ($VAULT_IP) to /etc/hosts"
+
       - name: Get Vault Token
         id: vault-token
         run: |
