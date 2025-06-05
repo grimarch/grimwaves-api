@@ -4,6 +4,12 @@ services:
     container_name: vault-agent-e2e
     networks:
       - grimwaves-e2e-network
+    healthcheck:
+      test: ["CMD", "ls", "/vault-agent/token/vault-token"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
 
   traefik:
     container_name: grimwaves-traefik-e2e
@@ -17,6 +23,12 @@ services:
       - "api.grimwaves.local:127.0.0.1"
       - "grimwaves.local:127.0.0.1"
       - "health.local:127.0.0.1"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://api:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   api:
     container_name: grimwaves-api-e2e
@@ -24,11 +36,23 @@ services:
       - grimwaves-e2e-network
     ports:
       - "8000:8000" # Expose API port directly for E2E tests
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   redis:
     container_name: grimwaves-redis-e2e
     networks:
       - grimwaves-e2e-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   celery-worker:
     container_name: grimwaves-celery-worker-e2e
