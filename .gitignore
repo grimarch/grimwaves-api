@@ -209,6 +209,7 @@ docs
 *.tfstate
 *.tfstate.backup
 .terraform/
+*.tfvars
 
 # Ignore SOPS files containing private keys
 .sops/age/keys.txt

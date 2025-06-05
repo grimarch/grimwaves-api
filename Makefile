@@ -2,14 +2,17 @@ VAULT_TOKEN_FILE ?= ~/.vault-token
 VAULT_ENV_SCRIPT := scripts/load_secrets_from_vault.py
 
 .PHONY: dev prod down down-clean restart-dev restart-prod logs logs-api logs-traefik prune \
-	help vault-init vault-apply vault-plan vault-edit vault-decrypt compose-logs logs-to-file logs-aggregated logs-watch flush-cache vault-check-env vault-test-connection vault-get-github-credentials
+	help vault-init vault-apply vault-plan vault-edit vault-decrypt compose-logs logs-to-file logs-aggregated logs-watch flush-cache vault-check-env vault-test-connection vault-get-github-credentials \
+	vault-ip-get vault-ip-set vault-ip-show vault-ip-test
 
 # ================= Docker Compose ====================
 
 # Default target
 all: help
 
-dev: ## Run docker compose with dev environment
+dev: ## Run docker compose with dev environment (автоматически получает IP Vault)
+	@echo "🔍 Автоматическое получение IP адреса Vault сервера..."
+	@make vault-ip-get
 	@echo "⏳⚙️  Loading secrets from Vault and building development environment..."
 	@VAULT_TOKEN=$$(cat ~/.vault-token) \
 	poetry run python scripts/load_secrets_from_vault.py | tr '\n' ' ' | \
@@ -429,3 +432,70 @@ vault-get-github-credentials: vault-test-connection ## Получить Role ID 
 	@echo "   make vault-rotate-secret-id && make vault-get-github-credentials"
 	@echo "-------------------------------------------"
 	@echo "✅ Готово! Скопируйте эти значения в GitHub Secrets"
+
+# ==============================================================================
+# VAULT IP MANAGEMENT
+# ==============================================================================
+
+vault-ip-get: ## Автоматически получить IP адрес Vault сервера из Terraform и обновить .env
+	@echo "🔍 Получение IP адреса Vault сервера из Terraform..."
+	@chmod +x scripts/get-vault-ip.sh
+	@./scripts/get-vault-ip.sh
+
+vault-ip-set: ## Установить IP адрес Vault сервера вручную (использование: make vault-ip-set IP=1.2.3.4)
+	@if [ -z "$(IP)" ]; then \
+		echo "❌ Ошибка: IP адрес не указан"; \
+		echo "   Использование: make vault-ip-set IP=1.2.3.4"; \
+		exit 1; \
+	fi
+	@echo "📝 Установка IP адреса Vault сервера: $(IP)"
+	@if [ ! -f ".env" ]; then \
+		echo "# Vault configuration" > .env; \
+		echo "VAULT_SERVER_IP=$(IP)" >> .env; \
+		echo "VAULT_ADDR=https://vault-docker-lab1.vault-docker-lab.lan:8200" >> .env; \
+		echo "VAULT_PROJECT_NAME=learn-vault-lab" >> .env; \
+		echo "ENVIRONMENT=development" >> .env; \
+		echo "✅ Создан новый .env файл с IP: $(IP)"; \
+	else \
+		if grep -q "VAULT_SERVER_IP=" .env; then \
+			sed -i "s/VAULT_SERVER_IP=.*/VAULT_SERVER_IP=$(IP)/" .env; \
+		else \
+			echo "VAULT_SERVER_IP=$(IP)" >> .env; \
+		fi; \
+		echo "✅ Обновлен VAULT_SERVER_IP в .env: $(IP)"; \
+	fi
+	@echo "🚀 Экспортируйте переменную: export VAULT_SERVER_IP=$(IP)"
+
+vault-ip-show: ## Показать текущий IP адрес Vault сервера
+	@echo "🔍 Текущая конфигурация Vault IP:"
+	@if [ -f ".env" ] && grep -q "VAULT_SERVER_IP=" .env; then \
+		echo "   Из .env файла: $$(grep VAULT_SERVER_IP= .env | cut -d= -f2)"; \
+	else \
+		echo "   .env файл не найден или не содержит VAULT_SERVER_IP"; \
+	fi
+	@if [ -n "$$VAULT_SERVER_IP" ]; then \
+		echo "   Из переменной окружения: $$VAULT_SERVER_IP"; \
+	else \
+		echo "   Переменная окружения VAULT_SERVER_IP не установлена"; \
+	fi
+	@echo ""
+	@echo "💡 Команды для управления:"
+	@echo "   make vault-ip-get         # Получить из Terraform"
+	@echo "   make vault-ip-set IP=X.X.X.X  # Установить вручную"
+
+vault-ip-test: ## Проверить подключение к Vault серверу по текущему IP
+	@echo "🔍 Тестирование подключения к Vault серверу..."
+	@if [ ! -f ".env" ] || ! grep -q "VAULT_SERVER_IP=" .env; then \
+		echo "❌ VAULT_SERVER_IP не настроен в .env файле"; \
+		echo "   Запустите: make vault-ip-get или make vault-ip-set IP=X.X.X.X"; \
+		exit 1; \
+	fi
+	@VAULT_IP=$$(grep VAULT_SERVER_IP= .env | cut -d= -f2); \
+	echo "📡 Проверка подключения к $$VAULT_IP:8200..."; \
+	if timeout 5 bash -c "</dev/tcp/$$VAULT_IP/8200" 2>/dev/null; then \
+		echo "✅ Vault сервер доступен по адресу $$VAULT_IP:8200"; \
+	else \
+		echo "❌ Vault сервер недоступен по адресу $$VAULT_IP:8200"; \
+		echo "   Проверьте IP адрес и статус сервера"; \
+		exit 1; \
+	fi
