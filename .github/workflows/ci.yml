@@ -266,11 +266,11 @@ jobs:
       
       - name: Docker logs on failure
         if: failure()
-        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs
 
       - name: Stop services
         if: always() # Always run to clean up
-        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down
 
   build_and_push_docker_image:
     name: Build and Push Docker Image
