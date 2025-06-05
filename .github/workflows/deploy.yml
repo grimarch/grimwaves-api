@@ -67,11 +67,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Vault CLI
-        run: |
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-          sudo apt-get update && sudo apt-get install vault
+      - name: Setup Vault
+        uses: ./.github/actions/setup-vault
+        env:
+          VAULT_SERVER_IP: ${{ secrets.VAULT_SERVER_IP }}
+
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3

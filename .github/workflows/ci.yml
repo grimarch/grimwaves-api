@@ -212,18 +212,10 @@ jobs:
       - name: Create reports directory for E2E tests
         run: mkdir -p reports && sudo chown -R runner:runner reports
 
-      - name: Install Vault CLI
-        run: |
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-          sudo apt-get update && sudo apt-get install vault
-
-      - name: Setup Vault DNS resolution
-        run: |
-          # Add Vault domain to /etc/hosts for DNS resolution in CI
-          VAULT_IP="${{ secrets.VAULT_SERVER_IP }}"
-          echo "$VAULT_IP vault-docker-lab1.vault-docker-lab.lan" | sudo tee -a /etc/hosts
-          echo "✅ Added Vault domain ($VAULT_IP) to /etc/hosts"
+      - name: Setup Vault
+        uses: ./.github/actions/setup-vault
+        env:
+          VAULT_SERVER_IP: ${{ secrets.VAULT_SERVER_IP }}
 
       - name: Get Vault Token
         id: vault-token
