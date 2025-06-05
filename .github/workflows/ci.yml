@@ -178,7 +178,7 @@ jobs:
           VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
           VAULT_PROJECT_NAME: learn-vault-lab
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
           
       # Логи vault-agent могут быть полезны при сбое, но не при успехе
       - name: Show vault-agent debug info on failure
