@@ -74,9 +74,10 @@ services:
       - grimwaves-network
     restart: unless-stopped
     depends_on:
-      - vault-agent
-      - traefik
-      - redis
+      vault-agent:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -131,8 +132,10 @@ services:
       - grimwaves-network
     restart: unless-stopped
     depends_on:
-      - redis
-      - api
+      vault-agent:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:

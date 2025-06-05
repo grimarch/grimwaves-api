@@ -172,9 +172,13 @@ jobs:
       - name: Start services for E2E tests
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_SERVER_IP: ${{ secrets.VAULT_SERVER_IP }}
           VAULT_SKIP_VERIFY: "true"
+          VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+          VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+          VAULT_PROJECT_NAME: learn-vault-lab
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build
           
       # Логи vault-agent могут быть полезны при сбое, но не при успехе
       - name: Show vault-agent debug info on failure
@@ -225,7 +229,7 @@ jobs:
         id: vault-token
         run: |
           export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
-          # Используем пути к файлам, созданным на предыдущем шаге
+          # Using the files created in the previous step
           export VAULT_TOKEN=$(vault write -tls-skip-verify -field=token auth/approle/login \
                               role_id=@vault-agent/auth/role-id \
                               secret_id=@vault-agent/auth/secret-id)
@@ -262,11 +266,11 @@ jobs:
       
       - name: Docker logs on failure
         if: failure()
-        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs
 
       - name: Stop services
         if: always() # Always run to clean up
-        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down
 
   build_and_push_docker_image:
     name: Build and Push Docker Image
