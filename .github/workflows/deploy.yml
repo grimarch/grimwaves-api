@@ -63,6 +63,10 @@ jobs:
     needs: prepare
     # Use GitHub Environment - this enables environment-specific secrets and protection rules
     environment: ${{ needs.prepare.outputs.environment }}
+    outputs:
+      token: ${{ steps.vault-token.outputs.token }}
+      droplet_ip: ${{ steps.terraform-outputs.outputs.droplet_ip }}
+      app_url: ${{ steps.terraform-outputs.outputs.app_url }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -97,10 +101,26 @@ jobs:
           # Remove temporary files
           rm role_id.tmp secret_id.tmp
           
+          # Mask the token in logs for security
+          echo "::add-mask::$VAULT_TOKEN"
+          
           # Set output and env var
           echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
           echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
 
+      - name: Get Runner IP and Update Firewall
+        id: runner-ip
+        env:
+          DO_TOKEN: ${{ secrets.DO_TOKEN }}
+        run: |
+          # Get runner's public IP
+          RUNNER_IP=$(curl -s https://ifconfig.me)
+          echo "Runner IP: $RUNNER_IP"
+          echo "::add-mask::$RUNNER_IP"
+          echo "runner_ip=$RUNNER_IP" >> $GITHUB_OUTPUT
+          
+          # Set the IP for Terraform
+          echo "TF_VAR_runner_ip=$RUNNER_IP" >> $GITHUB_ENV
 
       - name: Initialize Terraform
         working-directory: .cicd/terraform/compute
@@ -113,10 +133,13 @@ jobs:
           TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || 'staging-grimwaves.duckdns.org' }}
           TF_VAR_blue_green_enabled: ${{ vars.BLUE_GREEN_DEPLOYMENT || 'false' }}
         run: |
+          # Use dynamic IP for CI/CD runner instead of 0.0.0.0/0
           terraform plan \
             -var="do_token=${{ secrets.DO_TOKEN }}" \
             -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
             -var="environment=${{ needs.prepare.outputs.environment }}" \
+            -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
+            -var="emergency_ssh_access=false" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -152,6 +175,9 @@ jobs:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
           VAULT_TOKEN: ${{ needs.terraform.outputs.token }}
         run: |
+          # Mask the token in logs for security
+          echo "::add-mask::$VAULT_TOKEN"
+          
           # Get SSH private key from Vault
           mkdir -p ~/.ssh
           vault kv get -tls-skip-verify -field=private_key kv/ssh > ~/.ssh/id_rsa
