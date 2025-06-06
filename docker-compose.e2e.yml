@@ -1,66 +1,66 @@
 ---
 services:
-  vault-agent:
-    container_name: vault-agent-e2e
-    networks:
-      - grimwaves-e2e-network
-    healthcheck:
-      test: ["CMD", "ls", "/vault-agent/token/vault-token"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 5s
-
   traefik:
-    container_name: grimwaves-traefik-e2e
     volumes:
-      - ./traefik/traefik.dev.yml:/etc/traefik/traefik.yml:ro  # Override config for E2E
+      - ./traefik/traefik.dev.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/config:/etc/traefik/config:ro
       - ./traefik/config/certs:/etc/traefik/certs:ro
-    networks:
-      - grimwaves-e2e-network
     extra_hosts:
       - "api.grimwaves.local:127.0.0.1"
       - "grimwaves.local:127.0.0.1"
       - "health.local:127.0.0.1"
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://api:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
 
   api:
-    container_name: grimwaves-api-e2e
-    networks:
-      - grimwaves-e2e-network
-    ports:
-      - "8000:8000" # Expose API port directly for E2E tests
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.grimwaves.local`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.services.api.loadbalancer.server.port=8000"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.tls.domains[0].main=api.grimwaves.local"
+      - "traefik.http.routers.api.tls.domains[0].sans=grimwaves.local,*.grimwaves.local"
+      - "traefik.http.routers.api-http.rule=Host(`api.grimwaves.local`)"
+      - "traefik.http.routers.api-http.entrypoints=web"
+      - "traefik.http.routers.api-http.service=api@docker"
+    environment:
+      - GRIMWAVES_CELERY_BROKER_URL=redis://redis:6379/0
+      - GRIMWAVES_CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GRIMWAVES_REDIS_URL=redis://redis:6379/1
+    # Override volumes for CI environment (use local directories)
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs  # Use local logs directory
+      - ./vault-agent/sockets:/vault-agent/sockets
+      - ./vault-agent/rendered:/vault-agent/rendered:ro
 
   redis:
-    container_name: grimwaves-redis-e2e
-    networks:
-      - grimwaves-e2e-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+    image: redis:7.4.3-alpine
+    ports:
+      - "6379:6379"
+    # Use named volume for CI testing (ephemeral)
+    volumes:
+      - redis-data-e2e:/data
+    command: redis-server --appendonly yes
 
   celery-worker:
-    container_name: grimwaves-celery-worker-e2e
-    networks:
-      - grimwaves-e2e-network
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A grimwaves_api.core.celery_app worker --loglevel=info
+    # Override volumes for CI environment
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs  # Use local logs directory
+      - ./vault-agent/rendered:/vault-agent/rendered:ro
+    environment:
+      - SETTINGS_ENV_FILE=/vault-agent/rendered/.env
+      - GRIMWAVES_CELERY_BROKER_URL=redis://redis:6379/0
+      - GRIMWAVES_CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - GRIMWAVES_REDIS_URL=redis://redis:6379/1
+    depends_on:
+      - redis
 
-networks:
-  grimwaves-e2e-network:
-    name: grimwaves-e2e-network
-    driver: bridge
-
+# Define separate volumes for E2E testing
+volumes:
+  redis-data-e2e:
+    driver: local 
