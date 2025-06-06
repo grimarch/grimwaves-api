@@ -101,22 +101,6 @@ jobs:
           echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
           echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
 
-      - name: Get DigitalOcean API Token from Vault
-        id: do-token
-        env:
-          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-        run: |
-          DIGITALOCEAN_TOKEN=$(vault kv get -tls-skip-verify -field=api_token kv/digitalocean)
-          echo "token=$DIGITALOCEAN_TOKEN" >> $GITHUB_OUTPUT
-          echo "DO_TOKEN=$DIGITALOCEAN_TOKEN" >> $GITHUB_ENV
-
-      - name: Get SSH Key from Vault
-        id: ssh-key
-        env:
-          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-        run: |
-          SSH_KEY_FINGERPRINT=$(vault kv get -tls-skip-verify -field=ssh_key_fingerprint kv/digitalocean)
-          echo "fingerprint=$SSH_KEY_FINGERPRINT" >> $GITHUB_OUTPUT
 
       - name: Initialize Terraform
         working-directory: .cicd/terraform/compute
@@ -126,12 +110,12 @@ jobs:
         working-directory: .cicd/terraform/compute
         env:
           # Use environment variables from GitHub Environment if available
-          TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || 'grimwaves.com' }}
+          TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || 'staging-grimwaves.duckdns.org' }}
           TF_VAR_blue_green_enabled: ${{ vars.BLUE_GREEN_DEPLOYMENT || 'false' }}
         run: |
           terraform plan \
-            -var="do_token=${{ steps.do-token.outputs.token }}" \
-            -var="ssh_key_fingerprint=${{ steps.ssh-key.outputs.fingerprint }}" \
+            -var="do_token=${{ secrets.DO_TOKEN }}" \
+            -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
             -var="environment=${{ needs.prepare.outputs.environment }}" \
             -out=tfplan
 
