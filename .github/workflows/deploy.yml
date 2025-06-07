@@ -305,6 +305,7 @@ jobs:
           echo "ssh_port=$(terraform output -raw ssh_port)" >> $GITHUB_OUTPUT
 
   deploy:
+    if: ${{ false }}
     name: Deploy Application
     runs-on: ubuntu-latest
     needs: [prepare, terraform]
@@ -432,6 +433,7 @@ jobs:
           echo "Deployment completed successfully!"
 
   notify:
+    if: ${{ false }}
     name: Send Notifications
     runs-on: ubuntu-latest
     needs: [prepare, terraform, deploy]
@@ -468,12 +470,13 @@ jobs:
           from: GrimWaves CI/CD <${{ secrets.MAIL_USERNAME }}>
 
   e2e_tests:
+    if: ${{ false }}
     name: E2E Tests
     runs-on: ubuntu-latest
     needs: deploy
     environment: ${{ needs.prepare.outputs.environment }}
     # Only run E2E tests for staging environment
-    if: needs.prepare.outputs.environment == 'staging'
+    # if: needs.prepare.outputs.environment == 'staging'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
