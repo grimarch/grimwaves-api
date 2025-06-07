@@ -67,6 +67,7 @@ jobs:
       token: ${{ steps.vault-token.outputs.token }}
       droplet_ip: ${{ steps.terraform-outputs.outputs.droplet_ip }}
       app_url: ${{ steps.terraform-outputs.outputs.app_url }}
+      ssh_port: ${{ steps.terraform-outputs.outputs.ssh_port }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -76,11 +77,29 @@ jobs:
         env:
           VAULT_SERVER_IP: ${{ secrets.VAULT_SERVER_IP }}
 
-
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.7.5
+
+      - name: Configure AWS CLI for DigitalOcean Spaces
+        run: |
+          # Install AWS CLI if not present (usually pre-installed in GitHub runners)
+          if ! command -v aws &> /dev/null; then
+            echo "Installing AWS CLI..."
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+          else
+            echo "AWS CLI already installed: $(aws --version)"
+          fi
+          
+          # Configure AWS CLI for DigitalOcean Spaces
+          aws configure set aws_access_key_id "${{ secrets.AWS_ACCESS_KEY_ID }}"
+          aws configure set aws_secret_access_key "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          aws configure set default.region fra1
+          
+          echo "✅ AWS CLI configured for DigitalOcean Spaces"
 
       - name: Get Vault Token
         id: vault-token
@@ -160,24 +179,24 @@ jobs:
           
           # Test S3 connection manually
           echo "=== Testing S3 connection ==="
-          aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
-          aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
-          aws configure set default.region fra1
           
           # Try to list bucket contents
           aws s3 ls s3://grimwaves-terraform-state/ \
             --endpoint-url=https://fra1.digitaloceanspaces.com \
             || echo "❌ Failed to list bucket contents"
           
-          # Try to create a test file
+          # Test write access to bucket
           echo "test-$(date)" > test-connection.txt
           aws s3 cp test-connection.txt s3://grimwaves-terraform-state/test-connection.txt \
             --endpoint-url=https://fra1.digitaloceanspaces.com \
             && echo "✅ Successfully wrote test file" \
             || echo "❌ Failed to write test file"
           
-          # Clean up test file
+          # Clean up test file locally and remotely
           rm -f test-connection.txt
+          aws s3 rm s3://grimwaves-terraform-state/test-connection.txt \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            2>/dev/null || echo "Test file already cleaned up"
 
       - name: Terraform Plan
         working-directory: .cicd/terraform/compute
@@ -263,6 +282,7 @@ jobs:
         run: |
           echo "droplet_ip=$(terraform output -raw droplet_ipv4)" >> $GITHUB_OUTPUT
           echo "app_url=$(terraform output -raw app_url)" >> $GITHUB_OUTPUT
+          echo "ssh_port=$(terraform output -raw ssh_port)" >> $GITHUB_OUTPUT
 
   deploy:
     name: Deploy Application
@@ -286,11 +306,11 @@ jobs:
           
           # Setup known_hosts dynamically using ssh-keyscan with custom port
           touch ~/.ssh/known_hosts
-          echo "🔑 Adding droplet to known_hosts (port 2222)..."
+          echo "🔑 Adding droplet to known_hosts (port ${{ needs.terraform.outputs.ssh_port }})..."
           
           # Retry ssh-keyscan a few times as droplet might still be starting
           for i in {1..5}; do
-            if ssh-keyscan -p 2222 -H "${{ needs.terraform.outputs.droplet_ip }}" >> ~/.ssh/known_hosts 2>/dev/null; then
+            if ssh-keyscan -p ${{ needs.terraform.outputs.ssh_port }} -H "${{ needs.terraform.outputs.droplet_ip }}" >> ~/.ssh/known_hosts 2>/dev/null; then
               echo "✅ Successfully added droplet to known_hosts"
               break
             else
@@ -299,16 +319,16 @@ jobs:
             fi
           done
           
-          # Configure SSH to use custom port 2222
+          # Configure SSH to use custom port from Terraform
           cat >> ~/.ssh/config << EOF
           Host ${{ needs.terraform.outputs.droplet_ip }}
-            Port 2222
+            Port ${{ needs.terraform.outputs.ssh_port }}
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             LogLevel ERROR
           EOF
           
-          echo "🔧 SSH configuration complete (port 2222)"
+          echo "🔧 SSH configuration complete (port ${{ needs.terraform.outputs.ssh_port }})"
 
       - name: Copy Docker Compose files
         run: |
@@ -319,8 +339,8 @@ jobs:
             TARGET_COMPOSE="docker-compose.yml docker-compose.staging.yml"
           fi
           
-          # Copy files to remote server using custom port 2222
-          scp -P 2222 $TARGET_COMPOSE deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+          # Copy files to remote server using custom port from Terraform
+          scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
 
       - name: Configure Vault Agent
         run: |
@@ -328,9 +348,9 @@ jobs:
           echo "${{ secrets.VAULT_ROLE_ID }}" > role_id.tmp
           echo "${{ secrets.VAULT_SECRET_ID }}" > secret_id.tmp
           
-          # Copy to server using custom port 2222
-          scp -P 2222 role_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/role-id
-          scp -P 2222 secret_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/secret-id
+          # Copy to server using custom port from Terraform
+          scp -P ${{ needs.terraform.outputs.ssh_port }} role_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/role-id
+          scp -P ${{ needs.terraform.outputs.ssh_port }} secret_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/secret-id
           
           # Clean up
           rm role_id.tmp secret_id.tmp
@@ -349,10 +369,10 @@ jobs:
             fi
           } > .env.tmp
           
-          scp -P 2222 .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env.docker
+          scp -P ${{ needs.terraform.outputs.ssh_port }} .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env.docker
           
-          # Run deployment script using custom port 2222
-          ssh -p 2222 deploy@${{ needs.terraform.outputs.droplet_ip }} 'cd /var/app/grimwaves && sudo ./deploy.sh'
+          # Run deployment script using custom port from Terraform
+          ssh -p ${{ needs.terraform.outputs.ssh_port }} deploy@${{ needs.terraform.outputs.droplet_ip }} 'cd /var/app/grimwaves && sudo ./deploy.sh'
           
           # Clean up
           rm .env.tmp
