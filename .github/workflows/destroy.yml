@@ -14,15 +14,40 @@ on:
         description: 'Type "DESTROY" to confirm infrastructure destruction'
         required: true
         type: string
+  
+  # Временно добавляем push trigger для feature веток чтобы workflow появился в списке
+  # Этот trigger НЕ выполняет destroy - только показывает workflow в UI
+  push:
+    branches:
+      - 'feature/**'
+    paths:
+      - '.github/workflows/destroy.yml'  # Только при изменении самого workflow
 
 permissions:
   contents: read
   packages: read
 
 jobs:
+  # Безопасная задача для push trigger - только информационная
+  workflow-updated:
+    name: Destroy Workflow Updated
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - name: Workflow Updated
+        run: |
+          echo "🗑️ Destroy Infrastructure workflow has been updated"
+          echo "This workflow is available for manual execution:"
+          echo "Actions → Destroy Infrastructure → Run workflow"
+          echo ""
+          echo "⚠️  WARNING: This is a DESTRUCTIVE operation!"
+          echo "💡 Always verify the environment before destroying infrastructure"
+  
   validate:
     name: Validate Destroy Request
     runs-on: ubuntu-latest
+    # Запускается только при ручном запуске workflow_dispatch
+    if: github.event_name == 'workflow_dispatch'
     outputs:
       environment: ${{ steps.validate.outputs.environment }}
     steps:
