@@ -81,6 +81,45 @@ jobs:
         with:
           terraform_version: 1.7.5
 
+      - name: Configure AWS CLI for DigitalOcean Spaces
+        run: |
+          # Install AWS CLI if not present (usually pre-installed in GitHub runners)
+          if ! command -v aws &> /dev/null; then
+            echo "Installing AWS CLI..."
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+          else
+            echo "AWS CLI already installed: $(aws --version)"
+          fi
+          
+          # Configure AWS CLI for DigitalOcean Spaces
+          aws configure set aws_access_key_id "${{ secrets.AWS_ACCESS_KEY_ID }}"
+          aws configure set aws_secret_access_key "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          aws configure set default.region fra1
+          
+          echo "✅ AWS CLI configured for DigitalOcean Spaces"
+
+      - name: Extract SSH Public Key
+        id: ssh-public-key
+        run: |
+          # Create temporary private key file
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          
+          # Extract public key from private key
+          ssh-keygen -y -f /tmp/deploy_key > /tmp/deploy_key.pub
+          
+          # Read public key and set as environment variable
+          SSH_PUBLIC_KEY=$(cat /tmp/deploy_key.pub)
+          echo "::add-mask::$SSH_PUBLIC_KEY"
+          echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_ENV
+          
+          # Clean up temporary files
+          rm -f /tmp/deploy_key /tmp/deploy_key.pub
+          
+          echo "✅ SSH public key extracted and set for Terraform"
+
       - name: Get Vault Token
         id: vault-token
         env:
@@ -165,6 +204,7 @@ jobs:
           terraform plan -destroy \
             -var="do_token=${{ secrets.DO_TOKEN }}" \
             -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
+            -var="ssh_public_key=${{ steps.ssh-public-key.outputs.ssh_public_key }}" \
             -var="environment=${{ needs.validate.outputs.environment }}" \
             -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
             -var="emergency_ssh_access=false" \
@@ -187,6 +227,7 @@ jobs:
             terraform plan -destroy \
               -var="do_token=${{ secrets.DO_TOKEN }}" \
               -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
+              -var="ssh_public_key=${{ steps.ssh-public-key.outputs.ssh_public_key }}" \
               -var="environment=${{ needs.validate.outputs.environment }}" \
               -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
               -var="emergency_ssh_access=false" \
