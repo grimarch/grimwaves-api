@@ -1,0 +1,231 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment to destroy'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      confirm_destroy:
+        description: 'Type "DESTROY" to confirm infrastructure destruction'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  validate:
+    name: Validate Destroy Request
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.validate.outputs.environment }}
+    steps:
+      - name: Validate confirmation
+        id: validate
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "❌ Confirmation failed. You must type 'DESTROY' exactly to proceed."
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+
+  terraform-destroy:
+    name: Destroy Infrastructure
+    runs-on: ubuntu-latest
+    needs: validate
+    # Use GitHub Environment for secrets and protection rules
+    environment: ${{ needs.validate.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Vault
+        uses: ./.github/actions/setup-vault
+        env:
+          VAULT_SERVER_IP: ${{ secrets.VAULT_SERVER_IP }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: Get Vault Token
+        id: vault-token
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+          VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+        run: |
+          # Create temporary files for role_id and secret_id
+          echo "$VAULT_ROLE_ID" > role_id.tmp
+          echo "$VAULT_SECRET_ID" > secret_id.tmp
+          
+          # Get token from Vault
+          VAULT_TOKEN=$(vault write -tls-skip-verify -field=token auth/approle/login \
+                          role_id=@role_id.tmp \
+                          secret_id=@secret_id.tmp)
+          
+          # Remove temporary files
+          rm role_id.tmp secret_id.tmp
+          
+          # Mask the token in logs for security
+          echo "::add-mask::$VAULT_TOKEN"
+          
+          # Set output and env var
+          echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
+          echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
+
+      - name: Get Runner IP and Update Firewall
+        id: runner-ip
+        env:
+          DO_TOKEN: ${{ secrets.DO_TOKEN }}
+        run: |
+          # Get runner's public IP
+          RUNNER_IP=$(curl -s https://ifconfig.me)
+          echo "Runner IP: $RUNNER_IP"
+          echo "::add-mask::$RUNNER_IP"
+          echo "runner_ip=$RUNNER_IP" >> $GITHUB_OUTPUT
+          
+          # Set the IP for Terraform
+          echo "TF_VAR_runner_ip=$RUNNER_IP" >> $GITHUB_ENV
+
+      - name: Initialize Terraform
+        working-directory: .cicd/terraform/compute
+        env:
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: terraform init
+
+      - name: Check Current State
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Current infrastructure state ==="
+          
+          # Show current resources in state
+          if terraform state list 2>/dev/null | grep -q "."; then
+            echo "📋 Resources currently managed by Terraform:"
+            terraform state list
+            
+            echo ""
+            echo "📊 Resource summary:"
+            terraform state list | wc -l | xargs echo "Total resources:"
+          else
+            echo "ℹ️  No resources found in state for ${{ needs.validate.outputs.environment }} environment"
+            echo "This may mean:"
+            echo "  - Infrastructure was already destroyed"
+            echo "  - Wrong environment selected"
+            echo "  - State file not found"
+            exit 1
+          fi
+
+      - name: Terraform Destroy Plan
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Planning infrastructure destruction ==="
+          
+          terraform plan -destroy \
+            -var="do_token=${{ secrets.DO_TOKEN }}" \
+            -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
+            -var="environment=${{ needs.validate.outputs.environment }}" \
+            -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
+            -var="emergency_ssh_access=false" \
+            -out=destroyplan
+
+      - name: Terraform Destroy
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== ⚠️  DESTROYING INFRASTRUCTURE ⚠️  ==="
+          echo "Environment: ${{ needs.validate.outputs.environment }}"
+          echo "Initiated by: ${{ github.actor }}"
+          echo "Run ID: ${{ github.run_id }}"
+          
+          terraform apply -auto-approve destroyplan
+
+      - name: Verify Destruction
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Verifying infrastructure destruction ==="
+          
+          # Check if any resources remain
+          REMAINING_RESOURCES=$(terraform state list 2>/dev/null | wc -l)
+          
+          if [ "$REMAINING_RESOURCES" -eq "0" ]; then
+            echo "✅ All infrastructure successfully destroyed!"
+            echo "💰 No ongoing costs for ${{ needs.validate.outputs.environment }} environment"
+          else
+            echo "⚠️  Warning: $REMAINING_RESOURCES resources still exist:"
+            terraform state list
+            echo ""
+            echo "This may indicate:"
+            echo "  - Some resources failed to destroy"
+            echo "  - Resources are protected from deletion"
+            echo "  - Manual cleanup required"
+          fi
+
+  notify:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [validate, terraform-destroy]
+    if: always()
+    steps:
+      - name: Destruction Status
+        id: status
+        run: |
+          if [[ "${{ needs.terraform-destroy.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=🗑️ Infrastructure for ${{ needs.validate.outputs.environment }} successfully destroyed!" >> $GITHUB_OUTPUT
+            echo "icon=✅" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=❌ Failed to destroy infrastructure for ${{ needs.validate.outputs.environment }}!" >> $GITHUB_OUTPUT
+            echo "icon=💥" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Email Notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "${{ steps.status.outputs.icon }} Infrastructure Destruction - ${{ steps.status.outputs.message }}"
+          body: |
+            Infrastructure Destruction Report
+            
+            Status: ${{ steps.status.outputs.status }}
+            Environment: ${{ needs.validate.outputs.environment }}
+            Initiated by: ${{ github.actor }}
+            
+            ${{ steps.status.outputs.message }}
+            
+            Workflow Details:
+            - Repository: ${{ github.repository }}
+            - Run ID: ${{ github.run_id }}
+            - Commit: ${{ github.sha }}
+            
+            View full logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ---
+            🤖 Automated notification from GrimWaves CI/CD
+          to: ${{ secrets.MAIL_RECIPIENT }}
+          from: GrimWaves CI/CD <${{ secrets.MAIL_USERNAME }}> 
