@@ -7,6 +7,11 @@ variable "ssh_key_fingerprint" {
   description = "SSH key fingerprint for DigitalOcean droplets"
 }
 
+variable "ssh_public_key" {
+  description = "Public SSH key content for user authentication"
+  type        = string
+}
+
 variable "project_name" {
   description = "Project name, used for resource naming"
   default     = "grimwaves"

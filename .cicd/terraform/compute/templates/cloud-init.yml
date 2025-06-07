@@ -12,6 +12,17 @@ packages:
   - unzip
   - git
 
+# Create users with SSH access
+users:
+  - name: deploy
+    groups: [adm, audio, cdrom, dialout, dip, floppy, netdev, plugdev, sudo, video, docker]
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    shell: /bin/bash
+    lock_passwd: true  # Disable password login for security
+    ssh_authorized_keys:
+      # SSH public key from Terraform variable
+      - ${ssh_public_key}
+
 # Install Docker if not already present
 runcmd:
   # Create directory structure
@@ -62,17 +73,26 @@ runcmd:
   # Set hostname
   - hostnamectl set-hostname ${project_name}-${environment}
 
-  # Create deploy user
-  - useradd -m -s /bin/bash deploy
-  - usermod -aG docker deploy
-  - mkdir -p /home/deploy/.ssh
-  - echo 'deploy ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/deploy
+  # Deploy user is already created in users section above
+  # Just ensure docker group exists and user is added to it
+  - usermod -aG docker deploy || true
 
   # Set up firewall (basic)
   - ufw allow ssh
   - ufw allow http
   - ufw allow https
   - ufw --force enable
+
+  # Configure SSH to use custom port 2222 for security
+  - sed -i 's/#Port 22/Port 2222/' /etc/ssh/sshd_config
+  - sed -i 's/Port 22/Port 2222/' /etc/ssh/sshd_config
+  - echo "Port 2222" >> /etc/ssh/sshd_config
+  - systemctl restart sshd
+  
+  # Update firewall for custom SSH port
+  - ufw delete allow ssh || true
+  - ufw allow 2222/tcp comment 'SSH on custom port'
+  - ufw reload
 
   # Set environment variables file
   - |

@@ -12,6 +12,9 @@ provider "digitalocean" {
   token = var.do_token
 }
 
+# We'll use a variable for the public key instead of data source
+# since we need the actual public key content for cloud-init
+
 locals {
   name_prefix = "${var.project_name}-${var.environment}"
   tags        = ["app:${var.project_name}", "env:${var.environment}", "managed-by:terraform"]
@@ -57,8 +60,9 @@ resource "digitalocean_droplet" "app" {
   
   # Cloud-init script to set up Docker and docker-compose
   user_data = templatefile("${path.module}/templates/cloud-init.yml", {
-    project_name = var.project_name
-    environment  = var.environment
+    project_name   = var.project_name
+    environment    = var.environment
+    ssh_public_key = var.ssh_public_key
   })
 }
 

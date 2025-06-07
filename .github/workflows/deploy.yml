@@ -141,6 +141,26 @@ jobs:
           # Set the IP for Terraform
           echo "TF_VAR_runner_ip=$RUNNER_IP" >> $GITHUB_ENV
 
+      - name: Extract SSH Public Key
+        id: ssh-public-key
+        run: |
+          # Create temporary private key file
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          
+          # Extract public key from private key
+          ssh-keygen -y -f /tmp/deploy_key > /tmp/deploy_key.pub
+          
+          # Read public key and set as environment variable
+          SSH_PUBLIC_KEY=$(cat /tmp/deploy_key.pub)
+          echo "::add-mask::$SSH_PUBLIC_KEY"
+          echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_ENV
+          
+          # Clean up temporary files
+          rm -f /tmp/deploy_key /tmp/deploy_key.pub
+          
+          echo "✅ SSH public key extracted and set for Terraform"
+
       - name: Initialize Terraform
         working-directory: .cicd/terraform/compute
         env:
@@ -294,6 +314,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Wait for Droplet Initialization
+        run: |
+          echo "⏳ Waiting for droplet cloud-init to complete..."
+          echo "Droplet IP: ${{ needs.terraform.outputs.droplet_ip }}"
+          echo "SSH Port: ${{ needs.terraform.outputs.ssh_port }}"
+          
+          # Wait for cloud-init to finish (usually takes 2-5 minutes)
+          echo "Waiting 3 minutes for cloud-init to complete SSH configuration..."
+          sleep 180
+          
+          # Test if SSH port is open using netcat-like functionality with timeout
+          echo "Testing SSH port availability..."
+          for i in {1..12}; do
+            if timeout 10 bash -c "</dev/tcp/${{ needs.terraform.outputs.droplet_ip }}/${{ needs.terraform.outputs.ssh_port }}"; then
+              echo "✅ SSH port ${{ needs.terraform.outputs.ssh_port }} is now available!"
+              break
+            else
+              echo "⏳ Attempt $i: SSH port not ready yet, waiting 30 seconds..."
+              sleep 30
+            fi
+          done
+
       - name: Get SSH Key from GitHub Secrets
         id: ssh-key
         run: |
@@ -320,6 +362,7 @@ jobs:
           done
           
           # Configure SSH to use custom port from Terraform
+          echo "🔧 Configuring SSH to use custom port ${{ needs.terraform.outputs.ssh_port }}..."
           cat >> ~/.ssh/config << EOF
           Host ${{ needs.terraform.outputs.droplet_ip }}
             Port ${{ needs.terraform.outputs.ssh_port }}

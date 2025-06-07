@@ -15,8 +15,6 @@ terraform {
     skip_requesting_account_id  = true
     skip_s3_checksum            = true
     
-    force_path_style            = true
-    # Временно отключаем lockfile для отладки
-    # use_lockfile                = true
+    use_path_style              = true
   }
 }
