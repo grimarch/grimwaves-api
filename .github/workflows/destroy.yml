@@ -343,10 +343,11 @@ jobs:
           fi
 
   notify:
+    if: ${{ false }}
     name: Send Notifications
     runs-on: ubuntu-latest
     needs: [validate, terraform-destroy]
-    if: always()
+    # if: always()
     steps:
       - name: Destruction Status
         id: status

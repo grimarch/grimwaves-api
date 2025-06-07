@@ -96,7 +96,8 @@ variable "allowed_ssh_cidr_blocks" {
 variable "ssh_port" {
   description = "The port on which SSH service should listen."
   type        = number
-  default     = 2222 # Non-standard port for security
+  # default     = 2222 # Non-standard port for security
+  default     = 22
 }
 
 variable "emergency_ssh_access" {
