@@ -124,14 +124,22 @@ jobs:
 
       - name: Initialize Terraform
         working-directory: .cicd/terraform/compute
+        env:
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: terraform init
 
       - name: Terraform Plan
         working-directory: .cicd/terraform/compute
         env:
           # Use environment variables from GitHub Environment if available
-          TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || 'staging-grimwaves.duckdns.org' }}
           TF_VAR_blue_green_enabled: ${{ vars.BLUE_GREEN_DEPLOYMENT || 'false' }}
+          # Optional: Override domain if needed via GitHub Environment variables
+          TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || '' }}
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           # Use dynamic IP for CI/CD runner instead of 0.0.0.0/0
           terraform plan \
@@ -144,11 +152,19 @@ jobs:
 
       - name: Terraform Apply
         working-directory: .cicd/terraform/compute
+        env:
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: terraform apply -auto-approve tfplan
 
       - name: Get Outputs
         id: terraform-outputs
         working-directory: .cicd/terraform/compute
+        env:
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           echo "droplet_ip=$(terraform output -raw droplet_ipv4)" >> $GITHUB_OUTPUT
           echo "app_url=$(terraform output -raw app_url)" >> $GITHUB_OUTPUT
@@ -193,7 +209,7 @@ jobs:
           if [ "${{ needs.prepare.outputs.environment }}" == "production" ]; then
             TARGET_COMPOSE="docker-compose.yml docker-compose.prod.yml"
           else
-            TARGET_COMPOSE="docker-compose.yml docker-compose.dev.yml"
+            TARGET_COMPOSE="docker-compose.yml docker-compose.staging.yml"
           fi
           
           # Copy files to remote server
