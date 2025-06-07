@@ -130,6 +130,55 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: terraform init
 
+      - name: Debug Backend Configuration
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Backend Configuration Debug ==="
+          
+          # Check if local state exists (fallback mode)
+          if [ -f terraform.tfstate ]; then
+            echo "❌ WARNING: Local terraform.tfstate file exists!"
+            ls -la terraform.tfstate
+          else
+            echo "✅ No local terraform.tfstate found"
+          fi
+          
+          # Check .terraform directory
+          echo "=== .terraform directory contents ==="
+          ls -la .terraform/ || echo "No .terraform directory"
+          
+          # Check backend configuration
+          if [ -f .terraform/terraform.tfstate ]; then
+            echo "=== Backend state file ==="
+            cat .terraform/terraform.tfstate
+          else
+            echo "❌ No .terraform/terraform.tfstate found"
+          fi
+          
+          # Test S3 connection manually
+          echo "=== Testing S3 connection ==="
+          aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
+          aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
+          aws configure set default.region fra1
+          
+          # Try to list bucket contents
+          aws s3 ls s3://grimwaves-terraform-state/ \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            || echo "❌ Failed to list bucket contents"
+          
+          # Try to create a test file
+          echo "test-$(date)" > test-connection.txt
+          aws s3 cp test-connection.txt s3://grimwaves-terraform-state/test-connection.txt \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            && echo "✅ Successfully wrote test file" \
+            || echo "❌ Failed to write test file"
+          
+          # Clean up test file
+          rm -f test-connection.txt
+
       - name: Terraform Plan
         working-directory: .cicd/terraform/compute
         env:
@@ -158,6 +207,52 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: terraform apply -auto-approve tfplan
 
+      - name: Verify State File Upload
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Verifying state file was uploaded to bucket ==="
+          
+          # Check if local state file exists (should not exist with remote backend)
+          if [ -f terraform.tfstate ]; then
+            echo "❌ CRITICAL: Local terraform.tfstate exists! Remote backend failed!"
+            echo "Local state file size: $(wc -c < terraform.tfstate)"
+            echo "This means Terraform used local backend as fallback"
+            exit 1
+          else
+            echo "✅ No local terraform.tfstate found (good)"
+          fi
+          
+          # Try to list bucket contents to verify state file exists
+          echo "=== Checking bucket contents ==="
+          aws s3 ls s3://grimwaves-terraform-state/ \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            --recursive || echo "❌ Failed to list bucket contents"
+          
+          # Check specifically for our state file
+          if aws s3 ls s3://grimwaves-terraform-state/compute/terraform.tfstate \
+            --endpoint-url=https://fra1.digitaloceanspaces.com; then
+            echo "✅ State file found in bucket!"
+            
+            # Get file size
+            aws s3 ls s3://grimwaves-terraform-state/compute/terraform.tfstate \
+              --endpoint-url=https://fra1.digitaloceanspaces.com \
+              --human-readable --summarize
+          else
+            echo "❌ CRITICAL: State file NOT found in bucket!"
+            echo "This indicates Terraform did not upload state to remote backend"
+            exit 1
+          fi
+          
+          # Try to read the state file to verify it contains our resources
+          echo "=== Verifying state file contents ==="
+          aws s3 cp s3://grimwaves-terraform-state/compute/terraform.tfstate - \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            | jq '.resources[] | select(.type == "digitalocean_project") | .instances[0].attributes.name' \
+            || echo "❌ Failed to read/parse state file"
+
       - name: Get Outputs
         id: terraform-outputs
         working-directory: .cicd/terraform/compute
@@ -179,29 +274,40 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Vault CLI
-        run: |
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-          sudo apt-get update && sudo apt-get install vault
-
-      - name: Get SSH Key from Vault
+      - name: Get SSH Key from GitHub Secrets
         id: ssh-key
-        env:
-          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
-          VAULT_TOKEN: ${{ needs.terraform.outputs.token }}
         run: |
-          # Mask the token in logs for security
-          echo "::add-mask::$VAULT_TOKEN"
-          
-          # Get SSH private key from Vault
+          # Setup SSH key from GitHub secrets
           mkdir -p ~/.ssh
-          vault kv get -tls-skip-verify -field=private_key kv/ssh > ~/.ssh/id_rsa
+          
+          # Get SSH private key from GitHub secrets instead of Vault
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           
-          # Set known hosts
+          # Setup known_hosts dynamically using ssh-keyscan
           touch ~/.ssh/known_hosts
-          echo "${{ needs.terraform.outputs.droplet_ip }} $(vault kv get -tls-skip-verify -field=known_hosts kv/ssh)" >> ~/.ssh/known_hosts
+          echo "🔑 Adding droplet to known_hosts..."
+          
+          # Retry ssh-keyscan a few times as droplet might still be starting
+          for i in {1..5}; do
+            if ssh-keyscan -H "${{ needs.terraform.outputs.droplet_ip }}" >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "✅ Successfully added droplet to known_hosts"
+              break
+            else
+              echo "⏳ Attempt $i failed, waiting 10 seconds..."
+              sleep 10
+            fi
+          done
+          
+          # Alternatively, disable strict host key checking for CI/CD
+          cat >> ~/.ssh/config << EOF
+          Host ${{ needs.terraform.outputs.droplet_ip }}
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+          EOF
+          
+          echo "🔧 SSH configuration complete"
 
       - name: Copy Docker Compose files
         run: |
