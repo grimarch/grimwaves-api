@@ -196,7 +196,7 @@ jobs:
             -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
             -var="environment=${{ needs.prepare.outputs.environment }}" \
             -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
-            -var="emergency_ssh_access=false" \
+            -var="emergency_ssh_access=true" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -284,13 +284,13 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           
-          # Setup known_hosts dynamically using ssh-keyscan
+          # Setup known_hosts dynamically using ssh-keyscan with custom port
           touch ~/.ssh/known_hosts
-          echo "🔑 Adding droplet to known_hosts..."
+          echo "🔑 Adding droplet to known_hosts (port 2222)..."
           
           # Retry ssh-keyscan a few times as droplet might still be starting
           for i in {1..5}; do
-            if ssh-keyscan -H "${{ needs.terraform.outputs.droplet_ip }}" >> ~/.ssh/known_hosts 2>/dev/null; then
+            if ssh-keyscan -p 2222 -H "${{ needs.terraform.outputs.droplet_ip }}" >> ~/.ssh/known_hosts 2>/dev/null; then
               echo "✅ Successfully added droplet to known_hosts"
               break
             else
@@ -299,15 +299,16 @@ jobs:
             fi
           done
           
-          # Alternatively, disable strict host key checking for CI/CD
+          # Configure SSH to use custom port 2222
           cat >> ~/.ssh/config << EOF
           Host ${{ needs.terraform.outputs.droplet_ip }}
+            Port 2222
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             LogLevel ERROR
           EOF
           
-          echo "🔧 SSH configuration complete"
+          echo "🔧 SSH configuration complete (port 2222)"
 
       - name: Copy Docker Compose files
         run: |
@@ -318,8 +319,8 @@ jobs:
             TARGET_COMPOSE="docker-compose.yml docker-compose.staging.yml"
           fi
           
-          # Copy files to remote server
-          scp $TARGET_COMPOSE deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+          # Copy files to remote server using custom port 2222
+          scp -P 2222 $TARGET_COMPOSE deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
 
       - name: Configure Vault Agent
         run: |
@@ -327,9 +328,9 @@ jobs:
           echo "${{ secrets.VAULT_ROLE_ID }}" > role_id.tmp
           echo "${{ secrets.VAULT_SECRET_ID }}" > secret_id.tmp
           
-          # Copy to server
-          scp role_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/role-id
-          scp secret_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/secret-id
+          # Copy to server using custom port 2222
+          scp -P 2222 role_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/role-id
+          scp -P 2222 secret_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/secret-id
           
           # Clean up
           rm role_id.tmp secret_id.tmp
@@ -348,10 +349,10 @@ jobs:
             fi
           } > .env.tmp
           
-          scp .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env.docker
+          scp -P 2222 .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env.docker
           
-          # Run deployment script
-          ssh deploy@${{ needs.terraform.outputs.droplet_ip }} 'cd /var/app/grimwaves && sudo ./deploy.sh'
+          # Run deployment script using custom port 2222
+          ssh -p 2222 deploy@${{ needs.terraform.outputs.droplet_ip }} 'cd /var/app/grimwaves && sudo ./deploy.sh'
           
           # Clean up
           rm .env.tmp

@@ -181,35 +181,74 @@ jobs:
           echo "Initiated by: ${{ github.actor }}"
           echo "Run ID: ${{ github.run_id }}"
           
-          # First attempt at destroy
+          # Function to create fresh destroy plan
+          create_destroy_plan() {
+            echo "📋 Creating fresh destroy plan..."
+            terraform plan -destroy \
+              -var="do_token=${{ secrets.DO_TOKEN }}" \
+              -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
+              -var="environment=${{ needs.validate.outputs.environment }}" \
+              -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
+              -var="emergency_ssh_access=false" \
+              -out=fresh_destroyplan
+          }
+          
+          # First attempt at destroy with existing plan
           if ! terraform apply -auto-approve destroyplan; then
-            echo "⚠️ Terraform destroy failed, checking for VPC cleanup issues..."
+            echo "⚠️ First destroy attempt failed..."
             
-            # Get VPC ID from state if it still exists
+            # Check if it's a stale plan error
+            if grep -q "Saved plan is stale" <<< "$?"; then
+              echo "🔄 Plan is stale, creating fresh plan..."
+              create_destroy_plan
+              if ! terraform apply -auto-approve fresh_destroyplan; then
+                echo "⚠️ Fresh plan destroy also failed, checking for VPC issues..."
+              else
+                echo "✅ Fresh plan destroy succeeded!"
+                exit 0
+              fi
+            fi
+            
+            # Handle VPC cleanup issues
+            echo "🔍 Checking for VPC cleanup issues..."
             VPC_ID=$(terraform state show digitalocean_vpc.grimwaves_vpc 2>/dev/null | grep -o 'id.*=.*"[^"]*"' | cut -d'"' -f2 || echo "")
             
             if [ -n "$VPC_ID" ]; then
               echo "🔍 Found VPC ID: $VPC_ID"
               echo "Attempting manual VPC cleanup..."
               
-              # Wait a bit for resources to fully detach
+              # Wait for resources to fully detach
               echo "⏳ Waiting 30 seconds for resources to detach..."
               sleep 30
               
               # Try to delete VPC manually via API
               echo "🗑️ Attempting to delete VPC via API..."
-              curl -X DELETE \
+              VPC_DELETE_RESPONSE=$(curl -s -w "%{http_code}" -o /tmp/vpc_response.json -X DELETE \
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
-                "https://api.digitalocean.com/v2/vpcs/$VPC_ID" || true
+                "https://api.digitalocean.com/v2/vpcs/$VPC_ID")
               
-              # Wait and retry terraform destroy
-              echo "⏳ Waiting another 30 seconds..."
-              sleep 30
+              echo "VPC deletion response code: $VPC_DELETE_RESPONSE"
+              if [ "$VPC_DELETE_RESPONSE" -eq 204 ]; then
+                echo "✅ VPC successfully deleted via API"
+                # Remove VPC from terraform state
+                terraform state rm digitalocean_vpc.grimwaves_vpc || true
+              else
+                echo "❌ VPC deletion failed, response:"
+                cat /tmp/vpc_response.json || echo "No response file"
+                
+                echo "🔧 Removing VPC from state to prevent future issues..."
+                terraform state rm digitalocean_vpc.grimwaves_vpc || true
+                echo "⚠️ VPC may need manual deletion: https://cloud.digitalocean.com/networking/vpc"
+              fi
               
-              echo "🔄 Retrying terraform destroy..."
-              terraform apply -auto-approve destroyplan || echo "❌ Second attempt also failed"
+              # Create and apply fresh plan after manual cleanup
+              echo "🔄 Creating final destroy plan..."
+              create_destroy_plan
+              terraform apply -auto-approve fresh_destroyplan || echo "❌ Final destroy attempt failed"
             fi
+          else
+            echo "✅ Destroy succeeded on first attempt!"
           fi
 
       - name: Verify Destruction
