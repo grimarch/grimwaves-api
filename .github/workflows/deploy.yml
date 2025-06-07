@@ -437,7 +437,7 @@ jobs:
     name: Send Notifications
     runs-on: ubuntu-latest
     needs: [prepare, terraform, deploy]
-    if: always()
+    # if: always()
     # Note: This job does not use an environment context but still accesses environment-specific secrets
     steps:
       - name: Deployment Status
