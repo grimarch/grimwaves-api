@@ -25,8 +25,9 @@ resource "digitalocean_droplet" "app_inactive" {
   
   # Cloud-init script to set up Docker and docker-compose
   user_data = templatefile("${path.module}/templates/cloud-init.yml", {
-    project_name = var.project_name
-    environment  = var.environment
+    project_name   = var.project_name
+    environment    = var.environment
+    ssh_public_key = var.ssh_public_key
   })
 }
 
