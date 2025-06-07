@@ -44,7 +44,16 @@ variable "volume_size" {
 
 variable "domain_name" {
   description = "Main domain name"
-  default     = "grimwaves.com"
+  default     = "grimwaves.duckdns.org"
+}
+
+variable "app_domains" {
+  description = "Application domains for each environment"
+  type        = map(string)
+  default = {
+    staging    = "staging-grimwaves.duckdns.org"
+    production = "grimwaves.duckdns.org"
+  }
 }
 
 variable "enable_monitoring" {

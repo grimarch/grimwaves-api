@@ -78,29 +78,8 @@ resource "digitalocean_volume_attachment" "data_attachment" {
   volume_id  = digitalocean_volume.data.id
 }
 
-# Create a domain record for the app
-resource "digitalocean_domain" "default" {
-  count = var.environment == "production" ? 1 : 0
-  name  = var.domain_name
-}
-
-resource "digitalocean_record" "app" {
-  count  = var.environment == "production" ? 1 : 0
-  domain = digitalocean_domain.default[0].name
-  type   = "A"
-  name   = "api"
-  value  = digitalocean_droplet.app.ipv4_address
-  ttl    = 3600
-}
-
-resource "digitalocean_record" "app_staging" {
-  count  = var.environment == "staging" ? 1 : 0
-  domain = var.domain_name
-  type   = "A"
-  name   = "api-staging"
-  value  = digitalocean_droplet.app.ipv4_address
-  ttl    = 3600
-}
+# DNS records are managed externally via DuckDNS
+# No DigitalOcean DNS resources needed
 
 # For production, create a load balancer if using blue-green deployment
 resource "digitalocean_loadbalancer" "public" {

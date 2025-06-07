@@ -25,7 +25,9 @@ output "project_id" {
 
 output "app_url" {
   description = "Application URL"
-  value       = var.environment == "production" ? "https://api.${var.domain_name}" : "https://api-staging.${var.domain_name}"
+  # If domain_name is overridden via TF_VAR_domain_name, use it directly
+  # Otherwise use predefined app_domains mapping
+  value = var.domain_name != "grimwaves.duckdns.org" ? "https://${var.domain_name}" : "https://${lookup(var.app_domains, var.environment)}"
 }
 
 output "active_color" {
@@ -46,7 +48,7 @@ output "deployment_info" {
     blue_green       = lookup(var.blue_green_deployment, var.environment, false)
     monitoring       = var.enable_monitoring
     backups_enabled  = lookup(var.enable_backups, var.environment, false)
-    domain           = var.domain_name
+    domain           = var.domain_name != "grimwaves.duckdns.org" ? var.domain_name : lookup(var.app_domains, var.environment)
   }
 }
 
