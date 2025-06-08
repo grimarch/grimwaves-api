@@ -149,7 +149,7 @@ resource "digitalocean_firewall" "web" {
   inbound_rule {
     protocol         = "tcp"
     port_range       = var.ssh_port                # SSH on non-standard port
-    source_addresses = [var.allowed_ssh_cidr_blocks, var.vpn_ip] # Only from allowed IPs
+    source_addresses = concat(var.allowed_ssh_cidr_blocks, [var.vpn_ip]) # Only from allowed IPs
   }
 
   # Enable emergency global SSH access if flag is true
