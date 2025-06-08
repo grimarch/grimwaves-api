@@ -507,7 +507,7 @@ jobs:
           fi
           
           # Copy files to remote server using custom port from Terraform
-          scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE Dockerfile Makefile .dockerignore pyproject.toml deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+          scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE Dockerfile Makefile .dockerignore pyproject.toml README.md deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
 
       - name: Configure Vault Agent
         run: |
@@ -524,6 +524,11 @@ jobs:
           
           # Clean up
           rm role_id.tmp secret_id.tmp
+
+      - name: Configure traefik
+        run: |
+          # Copy traefik files to remote server
+          scp -P ${{ needs.terraform.outputs.ssh_port }} -r traefik deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves
 
       - name: Run Deployment
         env:
