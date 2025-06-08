@@ -26,7 +26,7 @@ perform_network_checks
 # System updates and essential packages
 echo "Starting system updates and package installation..."
 apt-get update -yq
-apt-get install -yq curl unzip jq tree vim net-tools dnsutils docker.io docker-compose glances htop ncdu ca-certificates software-properties-common fail2ban
+apt-get install -yq curl unzip jq tree vim net-tools dnsutils docker.io docker-compose glances htop ncdu ca-certificates software-properties-common fail2ban make
 echo "✅ Essential packages (including docker.io) installed."
 
 # Add HashiCorp GPG key
