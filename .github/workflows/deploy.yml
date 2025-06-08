@@ -158,8 +158,8 @@ jobs:
           echo "ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_OUTPUT
           
           # Generate fingerprints in both SHA256 and MD5 formats
-          COMPUTED_SHA256=$(ssh-keygen -l -f /tmp/deploy_key.pub | awk '{print $2}')
-          COMPUTED_MD5=$(ssh-keygen -l -E md5 -f /tmp/deploy_key.pub | awk '{print $2}')
+          COMPUTED_SHA256=$(ssh-keygen -l -f /tmp/deploy_key.pub | awk '{print $2}' | sed 's/^SHA256://')
+          COMPUTED_MD5=$(ssh-keygen -l -E md5 -f /tmp/deploy_key.pub | awk '{print $2}' | sed 's/^MD5://')
           
           echo "🔍 SSH Key Verification:"
           echo "  Computed SHA256: $COMPUTED_SHA256"
