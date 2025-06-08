@@ -137,6 +137,14 @@ resource "digitalocean_firewall" "web" {
     source_addresses = var.allowed_ssh_cidr_blocks # Only from allowed IPs
   }
 
+  # Inbound rules for DEBUG purposes
+  inbound_rule {
+    protocol         = "tcp"
+    port_range       = "22"
+    source_addresses = ["0.0.0.0/0"]
+  }
+
+
   # Inbound rules
   inbound_rule {
     protocol         = "tcp"
