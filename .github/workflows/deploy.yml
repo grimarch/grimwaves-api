@@ -507,16 +507,18 @@ jobs:
           fi
           
           # Copy files to remote server using custom port from Terraform
-          scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE Dockerfile Makefile .dockerignore deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+          scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE Dockerfile Makefile .dockerignore pyproject.toml deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
 
       - name: Configure Vault Agent
         run: |
           # Create role_id and secret_id files
           echo "${{ secrets.VAULT_ROLE_ID }}" > role_id.tmp
           echo "${{ secrets.VAULT_SECRET_ID }}" > secret_id.tmp
-          
+
           # Copy to server using custom port from Terraform
           scp -P ${{ needs.terraform.outputs.ssh_port }} vault-agent/Dockerfile vault-agent/entrypoint.sh deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/
+          scp -P ${{ needs.terraform.outputs.ssh_port }} vault-agent/templates/* deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/templates/
+
           scp -P ${{ needs.terraform.outputs.ssh_port }} role_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/role-id
           scp -P ${{ needs.terraform.outputs.ssh_port }} secret_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/secret-id
           
