@@ -528,6 +528,74 @@ jobs:
           # Clean up
           rm role_id.tmp secret_id.tmp
 
+      - name: Copy Vault Certificates
+        run: |
+          echo "📋 Copying Vault CA certificates from Vault server..."
+          
+          # Extract Vault server IP from secrets
+          VAULT_SERVER_IP="${{ secrets.VAULT_SERVER_IP }}"
+          VAULT_SSH_PORT="2222"  # Default SSH port for vault server
+          
+          echo "Vault server IP: $VAULT_SERVER_IP"
+          
+          # Setup SSH key for vault server (same key should work for both servers)
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/vault_key
+          chmod 600 ~/.ssh/vault_key
+          
+          # Create certs directory on target server
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p ${{ needs.terraform.outputs.ssh_port }} \
+              deploy@${{ needs.terraform.outputs.droplet_ip }} \
+              "mkdir -p /var/app/grimwaves/vault-agent/certs"
+          
+          # Try to copy CA certificate from Vault server (try multiple possible paths)
+          echo "🔐 Copying CA certificate from Vault server..."
+          CERT_FOUND=false
+          
+          # Possible certificate paths on Vault server
+          CERT_PATHS=(
+            "/opt/vault_lab/containers/vault_docker_lab_1/certs/vault_docker_lab_ca.pem"
+            "/opt/vault_lab/certs/vault_docker_lab_ca.pem"
+            "/opt/vault_lab/containers/vault_docker_lab_2/certs/vault_docker_lab_ca.pem"
+            "/etc/vault/certs/ca.pem"
+          )
+          
+          for cert_path in "${CERT_PATHS[@]}"; do
+            echo "Trying to copy from: $cert_path"
+            if scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                   -i ~/.ssh/vault_key \
+                   -P $VAULT_SSH_PORT \
+                   vaultadmin@$VAULT_SERVER_IP:$cert_path \
+                   ./vault_ca.pem 2>/dev/null; then
+              echo "✅ Found certificate at: $cert_path"
+              CERT_FOUND=true
+              break
+            else
+              echo "❌ Certificate not found at: $cert_path"
+            fi
+          done
+          
+          if [ "$CERT_FOUND" = "true" ]; then
+            # Copy CA certificate to GrimWaves server  
+            echo "📤 Uploading CA certificate to GrimWaves server..."
+            scp -P ${{ needs.terraform.outputs.ssh_port }} \
+                ./vault_ca.pem \
+                deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/certs/vault_docker_lab_ca.pem
+            echo "✅ Vault CA certificate copied successfully"
+          else
+            echo "⚠️  Could not find Vault CA certificate on server"
+            echo "Will configure Vault Agent to skip TLS verification as fallback"
+            
+            # Create a placeholder cert file and configure tls_skip_verify
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -p ${{ needs.terraform.outputs.ssh_port }} \
+                deploy@${{ needs.terraform.outputs.droplet_ip }} \
+                "echo '# Placeholder - TLS verification disabled' > /var/app/grimwaves/vault-agent/certs/vault_docker_lab_ca.pem"
+          fi
+          
+          # Clean up local temp files
+          rm -f ./vault_ca.pem ~/.ssh/vault_key
+
       - name: Configure traefik
         run: |
           # Copy traefik files to remote server
@@ -537,12 +605,27 @@ jobs:
         env:
           ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
+          # Check if certificate was successfully copied
+          VAULT_SKIP_VERIFY="false"
+          if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                 -p ${{ needs.terraform.outputs.ssh_port }} \
+                 deploy@${{ needs.terraform.outputs.droplet_ip }} \
+                 "grep -q '# Placeholder' /var/app/grimwaves/vault-agent/certs/vault_docker_lab_ca.pem 2>/dev/null"; then
+            echo "⚠️  Using TLS skip verify mode (certificate not found)"
+            VAULT_SKIP_VERIFY="true"
+          else
+            echo "✅ Using TLS with CA certificate verification"
+            VAULT_SKIP_VERIFY="false"
+          fi
+          
           # Create .env file with the image tag and environment-specific variables
           {
             echo "DOCKER_TAG=${{ needs.prepare.outputs.tag }}"
             echo "ENVIRONMENT=$ENVIRONMENT"
             echo "VAULT_SERVER_IP=${{ secrets.VAULT_SERVER_IP }}"
             echo "VAULT_ADDR=${{ secrets.VAULT_ADDR }}"
+            echo "VAULT_SKIP_VERIFY=$VAULT_SKIP_VERIFY"
+            echo "VAULT_ROLE_NAME=grimwaves-role"
 
             # Add any environment-specific variables from GitHub Environment
             if [ -n "${{ vars.ADDITIONAL_ENV_VARS }}" ]; then
