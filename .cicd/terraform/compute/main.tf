@@ -233,6 +233,12 @@ resource "digitalocean_firewall" "web" {
     ]
   }
 
+  outbound_rule {
+    protocol              = "tcp"
+    port_range            = "8200-8250"
+    destination_addresses = ["${var.vault_server_ip}/32"]
+  }
+
   droplet_ids = [digitalocean_droplet.app.id]
 }
 

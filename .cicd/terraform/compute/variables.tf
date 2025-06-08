@@ -105,6 +105,12 @@ variable "vpn_ip" {
   sensitive   = true
 }
 
+variable "vault_server_ip" {
+  description = "IP address of the Vault server."
+  type        = string
+  sensitive   = true
+}
+
 variable "ssh_port" {
   description = "The port on which SSH service should listen."
   type        = number
