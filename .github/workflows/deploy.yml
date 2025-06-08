@@ -635,9 +635,9 @@ jobs:
                echo 'Testing ping to Vault domain...'; \
                ping -c 3 vault-docker-lab1.vault-docker-lab.lan || echo 'Ping to domain failed'; \
                echo 'Testing port 8200 via IP...'; \
-               nc -zv $VAULT_SERVER_IP 8200 || echo 'Port 8200 via IP not reachable'; \
+               nc -zvw 3 $VAULT_SERVER_IP 8200 || echo 'Port 8200 via IP not reachable'; \
                echo 'Testing port 8200 via domain...'; \
-               nc -zv vault-docker-lab1.vault-docker-lab.lan 8200 || echo 'Port 8200 via domain not reachable'; \
+               nc -zvw 3 vault-docker-lab1.vault-docker-lab.lan 8200 || echo 'Port 8200 via domain not reachable'; \
                echo 'Testing DNS resolution...'; \
                nslookup vault-docker-lab1.vault-docker-lab.lan || echo 'DNS resolution failed'; \
                echo 'Current /etc/hosts vault entries:'; \
