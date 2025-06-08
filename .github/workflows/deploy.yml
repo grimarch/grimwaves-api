@@ -157,20 +157,34 @@ jobs:
           echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_ENV
           echo "ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_OUTPUT
           
-          # Generate fingerprint and compare with DigitalOcean fingerprint
-          COMPUTED_FINGERPRINT=$(ssh-keygen -l -f /tmp/deploy_key.pub | awk '{print $2}')
-          echo "🔍 SSH Key Verification:"
-          echo "  Computed fingerprint: $COMPUTED_FINGERPRINT"
-          echo "  DO fingerprint: ${{ secrets.SSH_KEY_FINGERPRINT }}"
+          # Generate fingerprints in both SHA256 and MD5 formats
+          COMPUTED_SHA256=$(ssh-keygen -l -f /tmp/deploy_key.pub | awk '{print $2}')
+          COMPUTED_MD5=$(ssh-keygen -l -E md5 -f /tmp/deploy_key.pub | awk '{print $2}')
           
-          if [ "$COMPUTED_FINGERPRINT" = "${{ secrets.SSH_KEY_FINGERPRINT }}" ]; then
-            echo "✅ SSH key fingerprints match!"
+          echo "🔍 SSH Key Verification:"
+          echo "  Computed SHA256: $COMPUTED_SHA256"
+          echo "  Computed MD5:    $COMPUTED_MD5"
+          echo "  DO fingerprint:  ${{ secrets.SSH_KEY_FINGERPRINT }}"
+          
+          # Check which format matches
+          if [ "$COMPUTED_SHA256" = "${{ secrets.SSH_KEY_FINGERPRINT }}" ]; then
+            echo "✅ SSH key fingerprints match (SHA256 format)!"
+          elif [ "$COMPUTED_MD5" = "${{ secrets.SSH_KEY_FINGERPRINT }}" ]; then
+            echo "✅ SSH key fingerprints match (MD5 format)!"
           else
             echo "❌ SSH key fingerprints DO NOT match!"
+            echo "   DigitalOcean fingerprint: ${{ secrets.SSH_KEY_FINGERPRINT }}"
+            echo "   Your key SHA256:         $COMPUTED_SHA256"
+            echo "   Your key MD5:            $COMPUTED_MD5"
+            echo ""
             echo "   This means SSH_PRIVATE_KEY and SSH_KEY_FINGERPRINT in GitHub secrets don't correspond"
             echo "   You need to either:"
-            echo "   1. Update SSH_KEY_FINGERPRINT to match the private key"
-            echo "   2. Or update SSH_PRIVATE_KEY to match the fingerprint"
+            echo "   1. Update SSH_KEY_FINGERPRINT to one of the above values"
+            echo "   2. Or update SSH_PRIVATE_KEY to match the DigitalOcean fingerprint"
+            echo ""
+            echo "   💡 To get your key's fingerprint:"
+            echo "      SHA256: ssh-keygen -l -f ~/.ssh/your_key.pub"
+            echo "      MD5:    ssh-keygen -l -E md5 -f ~/.ssh/your_key.pub"
             exit 1
           fi
           
