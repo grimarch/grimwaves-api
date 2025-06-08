@@ -285,6 +285,7 @@ jobs:
             -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32"]' \
             -var="vpn_ip=${{ secrets.VPN_IP }}" \
             -var="emergency_ssh_access=true" \
+            -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
             -out=tfplan
 
       - name: Terraform Apply
