@@ -209,6 +209,7 @@ jobs:
             -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32"]' \
             -var="vpn_ip=${{ secrets.VPN_IP }}" \
             -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
+            -var="ssh_port=${{ secrets.SSH_PORT || 2222 }}" \
             -var="emergency_ssh_access=false" \
             -out=destroyplan
 
@@ -234,7 +235,7 @@ jobs:
               -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
               -var="emergency_ssh_access=false" \
               -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
-              -var="ssh_port=${{ secrets.SSH_PORT }}" \
+              -var="ssh_port=${{ secrets.SSH_PORT || 2222 }}" \
               -var="vpn_ip=${{ secrets.VPN_IP }}" \
               -out=fresh_destroyplan
           }
