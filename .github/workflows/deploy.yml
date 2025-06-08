@@ -157,6 +157,23 @@ jobs:
           echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_ENV
           echo "ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_OUTPUT
           
+          # Generate fingerprint and compare with DigitalOcean fingerprint
+          COMPUTED_FINGERPRINT=$(ssh-keygen -l -f /tmp/deploy_key.pub | awk '{print $2}')
+          echo "🔍 SSH Key Verification:"
+          echo "  Computed fingerprint: $COMPUTED_FINGERPRINT"
+          echo "  DO fingerprint: ${{ secrets.SSH_KEY_FINGERPRINT }}"
+          
+          if [ "$COMPUTED_FINGERPRINT" = "${{ secrets.SSH_KEY_FINGERPRINT }}" ]; then
+            echo "✅ SSH key fingerprints match!"
+          else
+            echo "❌ SSH key fingerprints DO NOT match!"
+            echo "   This means SSH_PRIVATE_KEY and SSH_KEY_FINGERPRINT in GitHub secrets don't correspond"
+            echo "   You need to either:"
+            echo "   1. Update SSH_KEY_FINGERPRINT to match the private key"
+            echo "   2. Or update SSH_PRIVATE_KEY to match the fingerprint"
+            exit 1
+          fi
+          
           # Clean up temporary files
           rm -f /tmp/deploy_key /tmp/deploy_key.pub
           
@@ -354,29 +371,74 @@ jobs:
             fi
           done
           
+          # Setup SSH key for diagnostics
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Add SSH debugging function
+          ssh_debug() {
+            echo "🔍 SSH Connection Debug:"
+            echo "  Target: deploy@${{ needs.terraform.outputs.droplet_ip }}:${{ needs.terraform.outputs.ssh_port }}"
+            echo "  Key fingerprint: $(ssh-keygen -l -f ~/.ssh/deploy_key | awk '{print $2}')"
+            
+            # Test SSH connection with verbose output (first attempt only)
+            if [ "$1" = "1" ]; then
+              echo "  Testing SSH connection with verbose output..."
+              ssh -vvv -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                  -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
+                  -p ${{ needs.terraform.outputs.ssh_port }} \
+                  deploy@${{ needs.terraform.outputs.droplet_ip }} \
+                  "echo 'SSH connection successful'" 2>&1 | head -50 || echo "SSH connection failed"
+            fi
+          }
+          
           # Now wait for cloud-init to complete by checking signal file
           echo "Checking cloud-init completion status..."
           for i in {1..30}; do
             if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                   -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
                    -p ${{ needs.terraform.outputs.ssh_port }} \
                    deploy@${{ needs.terraform.outputs.droplet_ip }} \
                    "test -f /tmp/cloud_init_done"; then
               echo "✅ Cloud-init completed successfully!"
               break
             else
+              # Show debug info only on first few attempts
+              if [ $i -le 3 ]; then
+                ssh_debug "$i"
+              fi
+              
               echo "⏳ Attempt $i: Cloud-init still running, waiting 20 seconds..."
               sleep 20
               if [ $i -eq 30 ]; then
                 echo "❌ Cloud-init failed to complete after 10 minutes"
+                
+                # Final debug attempt
+                ssh_debug "final"
+                
+                # Try to check what keys are authorized on the server
+                echo "🔍 Checking authorized keys on server (as root)..."
+                ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                    -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
+                    -p ${{ needs.terraform.outputs.ssh_port }} \
+                    root@${{ needs.terraform.outputs.droplet_ip }} \
+                    "echo 'Root authorized_keys:'; cat /root/.ssh/authorized_keys 2>/dev/null || echo 'No root authorized_keys'; echo 'Deploy authorized_keys:'; cat /home/deploy/.ssh/authorized_keys 2>/dev/null || echo 'No deploy authorized_keys'" || echo "Could not check authorized keys"
+                
                 # Show cloud-init logs for debugging
                 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                    -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
                     -p ${{ needs.terraform.outputs.ssh_port }} \
-                    deploy@${{ needs.terraform.outputs.droplet_ip }} \
-                    "sudo tail -50 /var/log/cloud-init-output.log" || true
+                    root@${{ needs.terraform.outputs.droplet_ip }} \
+                    "sudo tail -100 /var/log/cloud-init-output.log" || echo "Could not get cloud-init logs"
+                
                 exit 1
               fi
             fi
           done
+          
+          # Clean up SSH key
+          rm -f ~/.ssh/deploy_key
 
       - name: Get SSH Key from GitHub Secrets
         id: ssh-key
