@@ -502,6 +502,8 @@ jobs:
           
           # Copy files to remote server using custom port from Terraform
           scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+          scp -P ${{ needs.terraform.outputs.ssh_port }} Makefile deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+          scp -P ${{ needs.terraform.outputs.ssh_port }} .dockerignore deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.dockerignore
 
       - name: Configure Vault Agent
         run: |
@@ -524,16 +526,19 @@ jobs:
           {
             echo "DOCKER_TAG=${{ needs.prepare.outputs.tag }}"
             echo "ENVIRONMENT=$ENVIRONMENT"
+            echo "VAULT_SERVER_IP=${{ secrets.VAULT_SERVER_IP }}"
+            echo "VAULT_ADDR=${{ secrets.VAULT_ADDR }}"
+
             # Add any environment-specific variables from GitHub Environment
             if [ -n "${{ vars.ADDITIONAL_ENV_VARS }}" ]; then
               echo "${{ vars.ADDITIONAL_ENV_VARS }}"
             fi
           } > .env.tmp
           
-          scp -P ${{ needs.terraform.outputs.ssh_port }} .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env.docker
+          scp -P ${{ needs.terraform.outputs.ssh_port }} .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env
           
           # Run deployment script using custom port from Terraform
-          ssh -p ${{ needs.terraform.outputs.ssh_port }} deploy@${{ needs.terraform.outputs.droplet_ip }} 'cd /var/app/grimwaves && sudo ./deploy.sh'
+          ssh -p ${{ needs.terraform.outputs.ssh_port }} deploy@${{ needs.terraform.outputs.droplet_ip }} 'cd /var/app/grimwaves && sudo make compose-up'
           
           # Clean up
           rm .env.tmp
