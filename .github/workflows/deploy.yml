@@ -511,6 +511,8 @@ jobs:
           scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE Dockerfile Makefile .dockerignore pyproject.toml README.md deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
           # Copy grimwaves_api directory to remote server
           scp -P ${{ needs.terraform.outputs.ssh_port }} -r grimwaves_api deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+          # Copy data directory to remote server
+          scp -P ${{ needs.terraform.outputs.ssh_port }} -r data deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
 
 
       - name: Configure Vault Agent
