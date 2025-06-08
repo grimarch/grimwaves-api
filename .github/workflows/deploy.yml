@@ -225,6 +225,8 @@ jobs:
           TF_VAR_blue_green_enabled: ${{ vars.BLUE_GREEN_DEPLOYMENT || 'false' }}
           # Optional: Override domain if needed via GitHub Environment variables
           TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || '' }}
+          # SSH port configuration - use secret or default
+          TF_VAR_ssh_port: ${{ secrets.SSH_PORT || '22' }}
           # Credentials for DigitalOcean Spaces (S3-compatible backend)
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -233,6 +235,7 @@ jobs:
           terraform plan \
             -var="do_token=${{ secrets.DO_TOKEN }}" \
             -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
+            -var="ssh_port=${TF_VAR_ssh_port}" \
             -var="ssh_public_key=${{ steps.ssh-public-key.outputs.ssh_public_key }}" \
             -var="environment=${{ needs.prepare.outputs.environment }}" \
             -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
