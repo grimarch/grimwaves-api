@@ -147,24 +147,42 @@ test_docker_dns
 
 echo "✅ Docker successfully configured and verified."
 
-# Create base directory for Vault configurations and data on the Droplet
-echo "Creating base directories for Vault..."
-mkdir -p /opt/vault_lab/containers
-chown -R deploy:deploy /opt/vault_lab
-chmod -R 755 /opt/vault_lab
+# Create directory structure for GrimWaves API
+echo "Creating directory structure for GrimWaves API..."
+# shellcheck disable=SC2154  # project_name injected by Terraform
+mkdir -p /var/app/"${project_name}"/{logs,data}
+mkdir -p /var/app/"${project_name}"/vault-agent/{auth,token,rendered,templates,sockets}
 
-# Create subdirectories for each Vault instance
-echo "Creating subdirectories for Vault instances..."
-# shellcheck disable=SC2034  # i used in loop variable expansion 
-for i in {1..5}
-  do
-    mkdir -p /opt/vault_lab/containers/vault_docker_lab_"$${i}"/logs
-    mkdir -p /opt/vault_lab/containers/vault_docker_lab_"$${i}"/config
-    mkdir -p /opt/vault_lab/containers/vault_docker_lab_"$${i}"/certs
-    chown -R deploy:deploy /opt/vault_lab/containers/vault_docker_lab_"$${i}"
-    chmod -R 755 /opt/vault_lab/containers/vault_docker_lab_"$${i}"
-  done
-echo "✅ Vault directories created."
+# Set correct permissions for app directory
+chown -R 1000:1000 /var/app/"${project_name}"
+echo "✅ GrimWaves API directories created."
+
+# Mount volume for persistent data storage
+echo "Setting up persistent data volume..."
+if [ ! -d "/mnt/data" ]; then
+    mkdir -p /mnt/data
+fi
+
+# Mount the volume (environment and project_name injected by Terraform)
+# shellcheck disable=SC2154  # environment injected by Terraform
+mount /dev/disk/by-id/scsi-0DO_Volume_"${project_name}"-"${environment}"-data /mnt/data
+echo "/dev/disk/by-id/scsi-0DO_Volume_${project_name}-${environment}-data /mnt/data ext4 defaults,nofail,discard 0 0" >> /etc/fstab
+
+# Create subdirectories for different services
+mkdir -p /mnt/data/{redis,logs,backups}
+
+# Set proper ownership and permissions
+chown -R 1000:1000 /mnt/data
+chmod -R 755 /mnt/data
+
+# For Redis specifically (needs restrictive permissions)
+chmod 700 /mnt/data/redis
+echo "✅ Persistent data volume configured."
+
+# Set hostname for the server
+# shellcheck disable=SC2154  # environment and project_name injected by Terraform
+hostnamectl set-hostname "${project_name}"-"${environment}"
+echo "✅ Hostname set to ${project_name}-${environment}."
 
 # Signal that cloud-init basic setup (dirs, packages) has finished
 echo "✅ Cloud-init script (packages and directories) finished successfully."
