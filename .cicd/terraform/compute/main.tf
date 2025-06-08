@@ -48,7 +48,7 @@ resource "digitalocean_vpc" "grimwaves_vpc" {
 
 # Create Droplet for the application
 resource "digitalocean_droplet" "app" {
-  image              = "docker-20-04"
+  image              = var.droplet_image
   name               = local.droplet_name
   region             = var.region
   size               = lookup(var.droplet_size, var.environment)

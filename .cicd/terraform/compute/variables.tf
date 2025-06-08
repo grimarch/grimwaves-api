@@ -3,6 +3,12 @@ variable "do_token" {
   sensitive   = true
 }
 
+variable "droplet_image" {
+  description = "The image slug for the DigitalOcean Droplet."
+  type        = string
+  default     = "ubuntu-22-04-x64"
+}
+
 variable "ssh_key_fingerprint" {
   description = "SSH key fingerprint for DigitalOcean droplets"
 }
