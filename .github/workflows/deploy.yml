@@ -502,7 +502,7 @@ jobs:
             TARGET_COMPOSE="docker-compose.yml docker-compose.prod.yml"
           else
             echo "🔧 Preparing docker-compose files for staging..."
-            sed -i 's/docker-compose.prod.yml/docker-compose.staging.yml/g' Makefile
+            sed -i 's/docker-compose.dev.yml/docker-compose.staging.yml/g' Makefile
             TARGET_COMPOSE="docker-compose.yml docker-compose.staging.yml"
           fi
           
