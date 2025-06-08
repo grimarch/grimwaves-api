@@ -102,15 +102,17 @@ resource "digitalocean_firewall" "web_blue_green" {
     destination_addresses = ["0.0.0.0/0", "::/0"]
   }
 
-  # DNS resolution - STRICTLY LIMITED to trusted public DNS servers  
+  # DNS resolution - Allow DigitalOcean DNS servers + trusted public DNS servers  
   outbound_rule {
     protocol   = "udp"
     port_range = "53"
     destination_addresses = [
-      "8.8.8.8/32", # Google DNS Primary
-      "8.8.4.4/32", # Google DNS Secondary  
-      "1.1.1.1/32", # Cloudflare DNS Primary
-      "1.0.0.1/32"  # Cloudflare DNS Secondary
+      "67.207.67.2/32",  # DigitalOcean DNS Primary
+      "67.207.67.3/32",  # DigitalOcean DNS Secondary
+      "8.8.8.8/32",      # Google DNS Primary
+      "8.8.4.4/32",      # Google DNS Secondary  
+      "1.1.1.1/32",      # Cloudflare DNS Primary
+      "1.0.0.1/32"       # Cloudflare DNS Secondary
     ]
   }
 
@@ -118,10 +120,12 @@ resource "digitalocean_firewall" "web_blue_green" {
     protocol   = "tcp"
     port_range = "53"
     destination_addresses = [
-      "8.8.8.8/32", # Google DNS Primary
-      "8.8.4.4/32", # Google DNS Secondary
-      "1.1.1.1/32", # Cloudflare DNS Primary  
-      "1.0.0.1/32"  # Cloudflare DNS Secondary
+      "67.207.67.2/32",  # DigitalOcean DNS Primary
+      "67.207.67.3/32",  # DigitalOcean DNS Secondary
+      "8.8.8.8/32",      # Google DNS Primary
+      "8.8.4.4/32",      # Google DNS Secondary
+      "1.1.1.1/32",      # Cloudflare DNS Primary  
+      "1.0.0.1/32"       # Cloudflare DNS Secondary
     ]
   }
 
