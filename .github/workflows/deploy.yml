@@ -495,8 +495,10 @@ jobs:
         run: |
           # Prepare docker-compose files
           if [ "${{ needs.prepare.outputs.environment }}" == "production" ]; then
+            sed -i 's/docker-compose.dev.yml/docker-compose.prod.yml/g' Makefile
             TARGET_COMPOSE="docker-compose.yml docker-compose.prod.yml"
           else
+            sed -i 's/docker-compose.prod.yml/docker-compose.staging.yml/g' Makefile
             TARGET_COMPOSE="docker-compose.yml docker-compose.staging.yml"
           fi
           
@@ -536,7 +538,6 @@ jobs:
           } > .env.tmp
           
           scp -P ${{ needs.terraform.outputs.ssh_port }} .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env
-          
           # Run deployment script using custom port from Terraform
           ssh -p ${{ needs.terraform.outputs.ssh_port }} deploy@${{ needs.terraform.outputs.droplet_ip }} 'cd /var/app/grimwaves && sudo make compose-up'
           
