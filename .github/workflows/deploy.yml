@@ -507,9 +507,7 @@ jobs:
           fi
           
           # Copy files to remote server using custom port from Terraform
-          scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
-          scp -P ${{ needs.terraform.outputs.ssh_port }} Makefile deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
-          scp -P ${{ needs.terraform.outputs.ssh_port }} .dockerignore deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.dockerignore
+          scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE Dockerfile Makefile .dockerignore deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
 
       - name: Configure Vault Agent
         run: |
