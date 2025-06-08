@@ -28,6 +28,7 @@ resource "digitalocean_droplet" "app_inactive" {
     project_name   = var.project_name
     environment    = var.environment
     ssh_public_key = var.ssh_public_key
+    ssh_port       = var.ssh_port
   })
 }
 
