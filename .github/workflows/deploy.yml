@@ -494,10 +494,14 @@ jobs:
       - name: Copy Docker Compose files
         run: |
           # Prepare docker-compose files
+          echo "🔧 Preparing docker-compose files..."
+          echo "Environment: ${{ needs.prepare.outputs.environment }}"
           if [ "${{ needs.prepare.outputs.environment }}" == "production" ]; then
+            echo "🔧 Preparing docker-compose files for production..."
             sed -i 's/docker-compose.dev.yml/docker-compose.prod.yml/g' Makefile
             TARGET_COMPOSE="docker-compose.yml docker-compose.prod.yml"
           else
+            echo "🔧 Preparing docker-compose files for staging..."
             sed -i 's/docker-compose.prod.yml/docker-compose.staging.yml/g' Makefile
             TARGET_COMPOSE="docker-compose.yml docker-compose.staging.yml"
           fi
