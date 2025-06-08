@@ -109,6 +109,7 @@ resource "digitalocean_firewall" "web_blue_green" {
     destination_addresses = [
       "67.207.67.2/32",  # DigitalOcean DNS Primary
       "67.207.67.3/32",  # DigitalOcean DNS Secondary
+      "67.207.67.4/32",  # DigitalOcean DNS Tertiary
       "8.8.8.8/32",      # Google DNS Primary
       "8.8.4.4/32",      # Google DNS Secondary  
       "1.1.1.1/32",      # Cloudflare DNS Primary
@@ -122,6 +123,7 @@ resource "digitalocean_firewall" "web_blue_green" {
     destination_addresses = [
       "67.207.67.2/32",  # DigitalOcean DNS Primary
       "67.207.67.3/32",  # DigitalOcean DNS Secondary
+      "67.207.67.4/32",  # DigitalOcean DNS Tertiary
       "8.8.8.8/32",      # Google DNS Primary
       "8.8.4.4/32",      # Google DNS Secondary
       "1.1.1.1/32",      # Cloudflare DNS Primary  

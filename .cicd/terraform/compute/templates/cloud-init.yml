@@ -6,8 +6,8 @@ bootcmd:
   - |
     cat > /etc/systemd/resolved.conf.d/00-cloud-init.conf << EOF
     [Resolve]
-    DNS=8.8.8.8 1.1.1.1 8.8.4.4 1.0.0.1
-    FallbackDNS=67.207.67.3 67.207.67.2
+    DNS=67.207.67.2 67.207.67.3 67.207.67.4 8.8.8.8 1.1.1.1
+    FallbackDNS=8.8.4.4 1.0.0.1
     Cache=yes
     DNSStubListener=yes
     EOF
