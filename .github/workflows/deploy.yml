@@ -645,22 +645,6 @@ jobs:
                echo 'GrimWaves server public IP:'; \
                curl -s https://ifconfig.me || echo 'Could not get public IP'"
           
-          # Also check Vault server firewall and status
-          echo "🔍 Checking Vault server status and firewall..."
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -i ~/.ssh/vault_key \
-              -P 2222 \
-              vaultadmin@$VAULT_SERVER_IP \
-              "echo '=== Vault server diagnostics ==='; \
-               echo 'Vault containers status:'; \
-               docker ps | grep vault || echo 'No vault containers running'; \
-               echo 'Vault logs (last 10 lines):'; \
-               docker logs vault_docker_lab_1 --tail 10 2>/dev/null || echo 'Could not get vault logs'; \
-               echo 'Firewall status:'; \
-               sudo ufw status verbose || echo 'UFW not active'; \
-               echo 'Port 8200 listeners:'; \
-               sudo netstat -tlnp | grep :8200 || echo 'Port 8200 not listening'" || echo "Could not connect to Vault server for diagnostics"
-          
           # Clean up SSH key
           rm -f ~/.ssh/vault_key
 
