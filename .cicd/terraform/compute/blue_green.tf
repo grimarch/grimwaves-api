@@ -24,11 +24,14 @@ resource "digitalocean_droplet" "app_inactive" {
   tags               = concat(local.tags, ["color:${local.inactive_color}", "status:inactive"])
   
   # Cloud-init script to set up Docker and docker-compose
-  user_data = templatefile("${path.module}/templates/cloud-init.yml", {
-    project_name   = var.project_name
-    environment    = var.environment
-    ssh_public_key = var.ssh_public_key
-    ssh_port       = var.ssh_port
+  user_data = templatefile("${path.module}/templates/cloud-init.sh", {
+    network_utils_content = file("${path.module}/templates/utils/network.sh")
+    docker_utils_content  = file("${path.module}/templates/utils/docker.sh")
+    agent_utils_content   = file("${path.module}/templates/utils/agent.sh")
+    ssh_port              = var.ssh_port
+    project_name          = var.project_name
+    environment           = var.environment
+    ssh_public_key        = var.ssh_public_key
   })
 }
 
