@@ -227,7 +227,7 @@ jobs:
           # Optional: Override domain if needed via GitHub Environment variables
           TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || '' }}
           # SSH port configuration - use secret or default
-          TF_VAR_ssh_port: ${{ secrets.SSH_PORT || '22' }}
+          TF_VAR_ssh_port: ${{ secrets.SSH_PORT || '2222' }}
           # Credentials for DigitalOcean Spaces (S3-compatible backend)
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
