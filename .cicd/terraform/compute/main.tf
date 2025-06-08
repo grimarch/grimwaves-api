@@ -124,17 +124,17 @@ resource "digitalocean_loadbalancer" "public" {
 resource "digitalocean_firewall" "web" {
   name = "${local.name_prefix}-firewall"
 
-  # Allow HTTP and HTTPS from anywhere (restricted to known networks in production)
+  # Allow HTTP and HTTPS from anywhere for web access
   inbound_rule {
     protocol         = "tcp"
     port_range       = "80"
-    source_addresses = var.allowed_ssh_cidr_blocks # Only from allowed IPs
+    source_addresses = ["0.0.0.0/0", "::/0"] # Open to internet for web access
   }
 
   inbound_rule {
     protocol         = "tcp"
     port_range       = "443"
-    source_addresses = var.allowed_ssh_cidr_blocks # Only from allowed IPs
+    source_addresses = ["0.0.0.0/0", "::/0"] # Open to internet for web access
   }
 
   # Inbound rules for DEBUG purposes
