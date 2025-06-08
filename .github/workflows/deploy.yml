@@ -601,6 +601,69 @@ jobs:
           # Copy traefik files to remote server
           scp -P ${{ needs.terraform.outputs.ssh_port }} -r traefik deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves
 
+      - name: Test Network Connectivity
+        run: |
+          VAULT_SERVER_IP="${{ secrets.VAULT_SERVER_IP }}"
+          
+          echo "🔍 Testing network connectivity to Vault server..."
+          echo "Vault server IP: $VAULT_SERVER_IP"
+          
+          # Setup SSH key for vault server diagnostics
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/vault_key
+          chmod 600 ~/.ssh/vault_key
+          
+          # First add the DNS entry to /etc/hosts
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p ${{ needs.terraform.outputs.ssh_port }} \
+              deploy@${{ needs.terraform.outputs.droplet_ip }} \
+              "sudo sh -c '
+                 # Remove any existing entries for vault domains to avoid duplicates
+                 sed -i \"/vault-docker-lab/d\" /etc/hosts
+                 # Add new entry  
+                 echo \"$VAULT_SERVER_IP vault-docker-lab1.vault-docker-lab.lan\" >> /etc/hosts
+                 echo \"DNS mapping added to /etc/hosts\"
+               '"
+          
+          # Test connectivity from GrimWaves server to Vault server
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p ${{ needs.terraform.outputs.ssh_port }} \
+              deploy@${{ needs.terraform.outputs.droplet_ip }} \
+              "echo '=== Network connectivity test ==='; \
+               echo 'Testing ping to Vault server IP...'; \
+               ping -c 3 $VAULT_SERVER_IP || echo 'Ping to IP failed'; \
+               echo 'Testing ping to Vault domain...'; \
+               ping -c 3 vault-docker-lab1.vault-docker-lab.lan || echo 'Ping to domain failed'; \
+               echo 'Testing port 8200 via IP...'; \
+               nc -zv $VAULT_SERVER_IP 8200 || echo 'Port 8200 via IP not reachable'; \
+               echo 'Testing port 8200 via domain...'; \
+               nc -zv vault-docker-lab1.vault-docker-lab.lan 8200 || echo 'Port 8200 via domain not reachable'; \
+               echo 'Testing DNS resolution...'; \
+               nslookup vault-docker-lab1.vault-docker-lab.lan || echo 'DNS resolution failed'; \
+               echo 'Current /etc/hosts vault entries:'; \
+               grep vault /etc/hosts || echo 'No vault entries found'; \
+               echo 'GrimWaves server public IP:'; \
+               curl -s https://ifconfig.me || echo 'Could not get public IP'"
+          
+          # Also check Vault server firewall and status
+          echo "🔍 Checking Vault server status and firewall..."
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i ~/.ssh/vault_key \
+              -P 2222 \
+              vaultadmin@$VAULT_SERVER_IP \
+              "echo '=== Vault server diagnostics ==='; \
+               echo 'Vault containers status:'; \
+               docker ps | grep vault || echo 'No vault containers running'; \
+               echo 'Vault logs (last 10 lines):'; \
+               docker logs vault_docker_lab_1 --tail 10 2>/dev/null || echo 'Could not get vault logs'; \
+               echo 'Firewall status:'; \
+               sudo ufw status verbose || echo 'UFW not active'; \
+               echo 'Port 8200 listeners:'; \
+               sudo netstat -tlnp | grep :8200 || echo 'Port 8200 not listening'" || echo "Could not connect to Vault server for diagnostics"
+          
+          # Clean up SSH key
+          rm -f ~/.ssh/vault_key
+
       - name: Run Deployment
         env:
           ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
@@ -618,12 +681,36 @@ jobs:
             VAULT_SKIP_VERIFY="false"
           fi
           
+          # Setup proper DNS resolution and VAULT_ADDR using domain name
+          VAULT_SERVER_IP="${{ secrets.VAULT_SERVER_IP }}"
+          VAULT_ADDR="https://vault-docker-lab1.vault-docker-lab.lan:8200"
+          
+          echo "🔧 Configuring Vault connection:"
+          echo "  Server IP: $VAULT_SERVER_IP"
+          echo "  Vault Address: $VAULT_ADDR"
+          echo "  TLS Skip Verify: $VAULT_SKIP_VERIFY"
+          
+          # Add DNS resolution for Vault domain in /etc/hosts
+          echo "📝 Adding Vault domain to /etc/hosts..."
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p ${{ needs.terraform.outputs.ssh_port }} \
+              deploy@${{ needs.terraform.outputs.droplet_ip }} \
+              "sudo sh -c '
+                # Remove any existing entries for vault domains to avoid duplicates
+                sed -i \"/vault-docker-lab/d\" /etc/hosts
+                # Add new entry
+                echo \"$VAULT_SERVER_IP vault-docker-lab1.vault-docker-lab.lan\" >> /etc/hosts
+                echo \"Updated /etc/hosts with Vault domain mapping\"
+                echo \"Current vault entries:\"
+                grep vault /etc/hosts || echo \"No vault entries found\"
+              '"
+          
           # Create .env file with the image tag and environment-specific variables
           {
             echo "DOCKER_TAG=${{ needs.prepare.outputs.tag }}"
             echo "ENVIRONMENT=$ENVIRONMENT"
-            echo "VAULT_SERVER_IP=${{ secrets.VAULT_SERVER_IP }}"
-            echo "VAULT_ADDR=${{ secrets.VAULT_ADDR }}"
+            echo "VAULT_SERVER_IP=$VAULT_SERVER_IP"
+            echo "VAULT_ADDR=$VAULT_ADDR"
             echo "VAULT_SKIP_VERIFY=$VAULT_SKIP_VERIFY"
             echo "VAULT_ROLE_NAME=grimwaves-role"
 
