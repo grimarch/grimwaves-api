@@ -208,6 +208,7 @@ jobs:
             -var="environment=${{ needs.validate.outputs.environment }}" \
             -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32"]' \
             -var="vpn_ip=${{ secrets.VPN_IP }}" \
+            -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
             -var="emergency_ssh_access=false" \
             -out=destroyplan
 
