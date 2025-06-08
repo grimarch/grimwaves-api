@@ -323,7 +323,6 @@ jobs:
           echo "ssh_port=$(terraform output -raw ssh_port)" >> $GITHUB_OUTPUT
 
   deploy:
-    if: ${{ false }}
     name: Deploy Application
     runs-on: ubuntu-latest
     needs: [prepare, terraform]
@@ -339,19 +338,43 @@ jobs:
           echo "Droplet IP: ${{ needs.terraform.outputs.droplet_ip }}"
           echo "SSH Port: ${{ needs.terraform.outputs.ssh_port }}"
           
-          # Wait for cloud-init to finish (usually takes 2-5 minutes)
-          echo "Waiting 3 minutes for cloud-init to complete SSH configuration..."
-          sleep 180
-          
-          # Test if SSH port is open using netcat-like functionality with timeout
+          # Wait for SSH to become available first
           echo "Testing SSH port availability..."
-          for i in {1..12}; do
+          for i in {1..20}; do
             if timeout 10 bash -c "</dev/tcp/${{ needs.terraform.outputs.droplet_ip }}/${{ needs.terraform.outputs.ssh_port }}"; then
               echo "✅ SSH port ${{ needs.terraform.outputs.ssh_port }} is now available!"
               break
             else
-              echo "⏳ Attempt $i: SSH port not ready yet, waiting 30 seconds..."
-              sleep 30
+              echo "⏳ Attempt $i: SSH port not ready yet, waiting 15 seconds..."
+              sleep 15
+              if [ $i -eq 20 ]; then
+                echo "❌ SSH port failed to become available after 5 minutes"
+                exit 1
+              fi
+            fi
+          done
+          
+          # Now wait for cloud-init to complete by checking signal file
+          echo "Checking cloud-init completion status..."
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                   -p ${{ needs.terraform.outputs.ssh_port }} \
+                   deploy@${{ needs.terraform.outputs.droplet_ip }} \
+                   "test -f /tmp/cloud_init_done"; then
+              echo "✅ Cloud-init completed successfully!"
+              break
+            else
+              echo "⏳ Attempt $i: Cloud-init still running, waiting 20 seconds..."
+              sleep 20
+              if [ $i -eq 30 ]; then
+                echo "❌ Cloud-init failed to complete after 10 minutes"
+                # Show cloud-init logs for debugging
+                ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                    -p ${{ needs.terraform.outputs.ssh_port }} \
+                    deploy@${{ needs.terraform.outputs.droplet_ip }} \
+                    "sudo tail -50 /var/log/cloud-init-output.log" || true
+                exit 1
+              fi
             fi
           done
 
