@@ -151,10 +151,11 @@ jobs:
           # Extract public key from private key
           ssh-keygen -y -f /tmp/deploy_key > /tmp/deploy_key.pub
           
-          # Read public key and set as environment variable
+          # Read public key and set as environment variable and output
           SSH_PUBLIC_KEY=$(cat /tmp/deploy_key.pub)
           echo "::add-mask::$SSH_PUBLIC_KEY"
           echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_ENV
+          echo "ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_OUTPUT
           
           # Clean up temporary files
           rm -f /tmp/deploy_key /tmp/deploy_key.pub
@@ -231,6 +232,18 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
+          # Debug SSH public key (first 50 chars for security)
+          echo "=== SSH Public Key Debug ==="
+          SSH_KEY="${{ steps.ssh-public-key.outputs.ssh_public_key }}"
+          if [ -n "$SSH_KEY" ]; then
+            echo "✅ SSH public key found (length: ${#SSH_KEY})"
+            echo "Key type: $(echo "$SSH_KEY" | cut -d' ' -f1)"
+            echo "Key preview: $(echo "$SSH_KEY" | cut -c1-50)..."
+          else
+            echo "❌ SSH public key is empty!"
+            exit 1
+          fi
+          
           # Use dynamic IP for CI/CD runner instead of 0.0.0.0/0
           terraform plan \
             -var="do_token=${{ secrets.DO_TOKEN }}" \
