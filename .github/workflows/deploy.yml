@@ -516,6 +516,7 @@ jobs:
           echo "${{ secrets.VAULT_SECRET_ID }}" > secret_id.tmp
           
           # Copy to server using custom port from Terraform
+          scp -P ${{ needs.terraform.outputs.ssh_port }} vault-agent/Dockerfile vault-agent/entrypoint.sh deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/
           scp -P ${{ needs.terraform.outputs.ssh_port }} role_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/role-id
           scp -P ${{ needs.terraform.outputs.ssh_port }} secret_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/secret-id
           
