@@ -1,4 +1,19 @@
 #cloud-config
+# Configure DNS BEFORE any package operations
+bootcmd:
+  # Fix DNS resolution early in boot process
+  - mkdir -p /etc/systemd/resolved.conf.d
+  - |
+    cat > /etc/systemd/resolved.conf.d/00-cloud-init.conf << EOF
+    [Resolve]
+    DNS=8.8.8.8 1.1.1.1 8.8.4.4 1.0.0.1
+    FallbackDNS=67.207.67.3 67.207.67.2
+    Cache=yes
+    DNSStubListener=yes
+    EOF
+  - systemctl restart systemd-resolved
+  - sleep 3
+
 package_update: true
 package_upgrade: true
 
@@ -23,76 +38,10 @@ users:
       # SSH public key from Terraform variable
       - ${ssh_public_key}
 
-# Install Docker if not already present
-runcmd:
-  # Create directory structure
-  - mkdir -p /var/app/${project_name}
-  - mkdir -p /var/app/${project_name}/logs
-  - mkdir -p /var/app/${project_name}/data
-  - mkdir -p /var/app/${project_name}/vault-agent/auth
-  - mkdir -p /var/app/${project_name}/vault-agent/token
-  - mkdir -p /var/app/${project_name}/vault-agent/rendered
-  - mkdir -p /var/app/${project_name}/vault-agent/templates
-  - mkdir -p /var/app/${project_name}/vault-agent/sockets
-
-  # Set correct permissions
-  - chown -R 1000:1000 /var/app/${project_name}
-
-  # Mount volume for data
-  - if [ ! -d "/mnt/data" ]; then mkdir -p /mnt/data; fi
-  - mount /dev/disk/by-id/scsi-0DO_Volume_${project_name}-${environment}-data /mnt/data
-  - echo "/dev/disk/by-id/scsi-0DO_Volume_${project_name}-${environment}-data /mnt/data ext4 defaults,nofail,discard 0 0" >> /etc/fstab
-  
-  # Create subdirectories for different services
-  - mkdir -p /mnt/data/redis
-  - mkdir -p /mnt/data/logs
-  - mkdir -p /mnt/data/backups
-  
-  # Set proper ownership and permissions
-  - chown -R 1000:1000 /mnt/data
-  - chmod -R 755 /mnt/data
-  
-  # For Redis specifically (Redis runs as redis user in container, but maps to host UID)
-  - chmod 700 /mnt/data/redis
-
-  # Install Docker if not already installed (docker-20-04 image should have it already)
-  - if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh; fi
-  
-  # Install Docker Compose v2
-  - if ! command -v docker compose &> /dev/null; then
-      mkdir -p ~/.docker/cli-plugins/;
-      curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose;
-      chmod +x ~/.docker/cli-plugins/docker-compose;
-    fi
-
-  # Set up Vault CLI
-  - curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-  - apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-  - apt-get update && apt-get install vault -y
-
-  # Set hostname
-  - hostnamectl set-hostname ${project_name}-${environment}
-
-  # Deploy user is already created in users section above
-  # Just ensure docker group exists and user is added to it
-  - usermod -aG docker deploy || true
-
-  # Configure SSH to use custom port from variable for security
-  - sed -i 's/#Port 22/Port ${ssh_port}/' /etc/ssh/sshd_config
-  - sed -i 's/Port 22/Port ${ssh_port}/' /etc/ssh/sshd_config
-  - echo "Port ${ssh_port}" >> /etc/ssh/sshd_config
-  - systemctl restart sshd
-  
-  # Set environment variables file
-  - |
-    cat > /var/app/${project_name}/.env << EOF
-    ENVIRONMENT=${environment}
-    VAULT_ADDR=https://vault.example.com:8200
-    VAULT_SKIP_VERIFY=true
-    EOF
-
-# Configure the write_files module
+# Configure the write_files module - fix DNS and create app files
 write_files:
+  # DNS already configured in bootcmd section above
+
   - path: /var/app/${project_name}/vault-agent/templates/env.tmpl
     content: |
       {{ with secret "kv/data/grimwaves/${environment}" }}
@@ -203,4 +152,75 @@ write_files:
       echo "Starting services with new images..."
       docker compose up -d
       
-      echo "Deployment completed successfully!" 
+      echo "Deployment completed successfully!"
+
+# Install Docker if not already present
+runcmd:
+  # DNS already configured in bootcmd, just verify it's working
+  - sleep 2
+
+  # Create directory structure
+  - mkdir -p /var/app/${project_name}
+  - mkdir -p /var/app/${project_name}/logs
+  - mkdir -p /var/app/${project_name}/data
+  - mkdir -p /var/app/${project_name}/vault-agent/auth
+  - mkdir -p /var/app/${project_name}/vault-agent/token
+  - mkdir -p /var/app/${project_name}/vault-agent/rendered
+  - mkdir -p /var/app/${project_name}/vault-agent/templates
+  - mkdir -p /var/app/${project_name}/vault-agent/sockets
+
+  # Set correct permissions
+  - chown -R 1000:1000 /var/app/${project_name}
+
+  # Mount volume for data
+  - if [ ! -d "/mnt/data" ]; then mkdir -p /mnt/data; fi
+  - mount /dev/disk/by-id/scsi-0DO_Volume_${project_name}-${environment}-data /mnt/data
+  - echo "/dev/disk/by-id/scsi-0DO_Volume_${project_name}-${environment}-data /mnt/data ext4 defaults,nofail,discard 0 0" >> /etc/fstab
+  
+  # Create subdirectories for different services
+  - mkdir -p /mnt/data/redis
+  - mkdir -p /mnt/data/logs
+  - mkdir -p /mnt/data/backups
+  
+  # Set proper ownership and permissions
+  - chown -R 1000:1000 /mnt/data
+  - chmod -R 755 /mnt/data
+  
+  # For Redis specifically (Redis runs as redis user in container, but maps to host UID)
+  - chmod 700 /mnt/data/redis
+
+  # Install Docker if not already installed (docker-20-04 image should have it already)
+  - if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh; fi
+  
+  # Install Docker Compose v2
+  - if ! command -v docker compose &> /dev/null; then
+      mkdir -p ~/.docker/cli-plugins/;
+      curl -SL https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose;
+      chmod +x ~/.docker/cli-plugins/docker-compose;
+    fi
+
+  # Set up Vault CLI with proper GPG key handling (modern approach like learn-vault-docker-lab)
+  - wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null
+  - echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+  - apt-get update && apt-get install vault -y
+
+  # Set hostname
+  - hostnamectl set-hostname ${project_name}-${environment}
+
+  # Deploy user is already created in users section above
+  # Just ensure docker group exists and user is added to it
+  - usermod -aG docker deploy || true
+
+  # Configure SSH to use custom port from variable for security
+  - sed -i 's/#Port 22/Port ${ssh_port}/' /etc/ssh/sshd_config
+  - sed -i 's/Port 22/Port ${ssh_port}/' /etc/ssh/sshd_config
+  - echo "Port ${ssh_port}" >> /etc/ssh/sshd_config
+  - systemctl restart sshd
+  
+  # Set environment variables file
+  - |
+    cat > /var/app/${project_name}/.env << EOF
+    ENVIRONMENT=${environment}
+    VAULT_ADDR=https://vault.example.com:8200
+    VAULT_SKIP_VERIFY=true
+    EOF 
