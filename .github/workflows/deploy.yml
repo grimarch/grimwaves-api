@@ -251,7 +251,8 @@ jobs:
             -var="ssh_port=${TF_VAR_ssh_port}" \
             -var="ssh_public_key=${{ steps.ssh-public-key.outputs.ssh_public_key }}" \
             -var="environment=${{ needs.prepare.outputs.environment }}" \
-            -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
+            -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32"]' \
+            -var="vpn_ip=${{ secrets.VPN_IP }}" \
             -var="emergency_ssh_access=true" \
             -out=tfplan
 

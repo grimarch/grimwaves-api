@@ -99,6 +99,12 @@ variable "allowed_ssh_cidr_blocks" {
   }
 }
 
+variable "vpn_ip" {
+  description = "IP address of the VPN server."
+  type        = string
+  sensitive   = true
+}
+
 variable "ssh_port" {
   description = "The port on which SSH service should listen."
   type        = number

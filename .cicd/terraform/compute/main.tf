@@ -141,7 +141,7 @@ resource "digitalocean_firewall" "web" {
   inbound_rule {
     protocol         = "tcp"
     port_range       = "22"
-    source_addresses = ["0.0.0.0/0"]
+    source_addresses = [var.vpn_ip]
   }
 
 
@@ -149,7 +149,7 @@ resource "digitalocean_firewall" "web" {
   inbound_rule {
     protocol         = "tcp"
     port_range       = var.ssh_port                # SSH on non-standard port
-    source_addresses = var.allowed_ssh_cidr_blocks # Only from allowed IPs
+    source_addresses = [var.allowed_ssh_cidr_blocks, var.vpn_ip] # Only from allowed IPs
   }
 
   # Enable emergency global SSH access if flag is true
