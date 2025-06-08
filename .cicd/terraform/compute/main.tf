@@ -58,12 +58,13 @@ resource "digitalocean_droplet" "app" {
   backups            = lookup(var.enable_backups, var.environment, false)
   tags               = local.tags
   
-  # # Cloud-init script to set up Docker and docker-compose
-  # user_data = templatefile("${path.module}/templates/cloud-init.yml", {
-  #   project_name   = var.project_name
-  #   environment    = var.environment
-  #   ssh_public_key = var.ssh_public_key
-  # })
+  # Cloud-init script to set up Docker and docker-compose
+  user_data = templatefile("${path.module}/templates/cloud-init.yml", {
+    project_name   = var.project_name
+    environment    = var.environment
+    ssh_public_key = var.ssh_public_key
+    ssh_port       = var.ssh_port
+  })
 }
 
 # Create a volume for persistent data
