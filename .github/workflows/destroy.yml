@@ -85,7 +85,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           # Create backend config with environment-specific key
-          echo "key=compute/${{ needs.validate.outputs.environment }}/terraform.tfstate" > backend.conf
+          echo 'key = "compute/${{ needs.validate.outputs.environment }}/terraform.tfstate"' > backend.conf
           terraform init -backend-config=backend.conf
 
       - name: Check Current State
