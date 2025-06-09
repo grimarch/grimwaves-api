@@ -109,7 +109,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           # Create backend config with environment-specific key
-          echo "key=compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate" > backend.conf
+          echo 'key = "compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate"' > backend.conf
           terraform init -backend-config=backend.conf
 
       - name: Debug Backend Configuration
@@ -190,7 +190,7 @@ jobs:
           fi
           
           # Ensure backend config exists for plan
-          echo "key=compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate" > backend.conf
+          echo 'key = "compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate"' > backend.conf
           
           # Use dynamic IP for CI/CD runner instead of 0.0.0.0/0
           terraform plan \
@@ -215,7 +215,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           # Ensure backend config exists for apply
-          echo "key=compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate" > backend.conf
+          echo 'key = "compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate"' > backend.conf
           terraform apply -auto-approve tfplan
 
       - name: Verify State File Upload
@@ -274,7 +274,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           # Ensure backend config exists for outputs
-          echo "key=compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate" > backend.conf
+          echo 'key = "compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate"' > backend.conf
           echo "droplet_ip=$(terraform output -raw droplet_ipv4)" >> $GITHUB_OUTPUT
           echo "app_url=$(terraform output -raw app_url)" >> $GITHUB_OUTPUT
           echo "ssh_port=$(terraform output -raw ssh_port)" >> $GITHUB_OUTPUT
