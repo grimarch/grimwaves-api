@@ -1,0 +1,19 @@
+name: 'Setup Vault CLI and DNS'
+description: 'Installs Vault CLI and configures /etc/hosts for Vault DNS resolution in CI.'
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Vault CLI
+      shell: bash
+      run: |
+        curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+        sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+        sudo apt-get update && sudo apt-get install vault
+    - name: Setup Vault DNS resolution
+      shell: bash
+      run: |
+        if [ -z "$VAULT_SERVER_IP" ]; then echo "VAULT_SERVER_IP is not set"; exit 1; fi
+        echo "$VAULT_SERVER_IP vault-docker-lab1.vault-docker-lab.lan" | sudo tee -a /etc/hosts
+        echo "✅ Added Vault domain ($VAULT_SERVER_IP) to /etc/hosts"
+      env:
+        VAULT_SERVER_IP: ${{ env.VAULT_SERVER_IP }} 

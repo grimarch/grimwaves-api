@@ -1,0 +1,63 @@
+name: 'Extract SSH Public Key'
+description: 'Extracts SSH public key from private key'
+
+outputs:
+  ssh_public_key:
+    description: "Extracted SSH public key"
+    value: ${{ steps.ssh-public-key.outputs.ssh_public_key }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Extract SSH Public Key
+      id: ssh-public-key
+      shell: bash
+      run: |
+          # Create temporary private key file
+          echo "${{ env.SSH_PRIVATE_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          
+          # Extract public key from private key
+          ssh-keygen -y -f /tmp/deploy_key > /tmp/deploy_key.pub
+          
+          # Read public key and set as environment variable
+          SSH_PUBLIC_KEY=$(cat /tmp/deploy_key.pub)
+          echo "::add-mask::$SSH_PUBLIC_KEY"
+          echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_ENV
+          
+          # Generate fingerprints in both SHA256 and MD5 formats
+          COMPUTED_SHA256=$(ssh-keygen -l -f /tmp/deploy_key.pub | awk '{print $2}' | sed 's/^SHA256://')
+          COMPUTED_MD5=$(ssh-keygen -l -E md5 -f /tmp/deploy_key.pub | awk '{print $2}' | sed 's/^MD5://')
+          
+          echo "🔍 SSH Key Verification:"
+          echo "  Computed SHA256: $COMPUTED_SHA256"
+          echo "  Computed MD5:    $COMPUTED_MD5"
+          echo "  DO fingerprint:  ${{ env.SSH_KEY_FINGERPRINT }}"
+          
+          # Check which format matches
+          if [ "$COMPUTED_SHA256" = "${{ env.SSH_KEY_FINGERPRINT }}" ]; then
+            echo "✅ SSH key fingerprints match (SHA256 format)!"
+          elif [ "$COMPUTED_MD5" = "${{ env.SSH_KEY_FINGERPRINT }}" ]; then
+            echo "✅ SSH key fingerprints match (MD5 format)!"
+          else
+            echo "❌ SSH key fingerprints DO NOT match!"
+            echo "   DigitalOcean fingerprint: ${{ env.SSH_KEY_FINGERPRINT }}"
+            echo "   Your key SHA256:         $COMPUTED_SHA256"
+            echo "   Your key MD5:            $COMPUTED_MD5"
+            echo ""
+            echo "   This means SSH_PRIVATE_KEY and SSH_KEY_FINGERPRINT in GitHub secrets don't correspond"
+            echo "   You need to either:"
+            echo "   1. Update SSH_KEY_FINGERPRINT to one of the above values"
+            echo "   2. Or update SSH_PRIVATE_KEY to match the DigitalOcean fingerprint"
+            echo ""
+            echo "   💡 To get your key's fingerprint:"
+            echo "      SHA256: ssh-keygen -l -f ~/.ssh/your_key.pub"
+            echo "      MD5:    ssh-keygen -l -E md5 -f ~/.ssh/your_key.pub"
+            exit 1
+          fi
+
+          # Clean up temporary files
+          rm -f /tmp/deploy_key /tmp/deploy_key.pub
+          
+          echo "✅ SSH public key extracted and set for Terraform"
+          echo "ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_OUTPUT

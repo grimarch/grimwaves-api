@@ -1,10 +1,13 @@
 import asyncio
+import os
 from collections.abc import AsyncGenerator
 
 import httpx
+import pytest
 import pytest_asyncio
 
-BASE_URL = "https://api.grimwaves.local"  # Или ваш актуальный URL для E2E тестов
+# Read BASE_URL from environment variable or use a default
+BASE_URL = os.getenv("API_BASE_URL", "https://api.grimwaves.local")
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -56,3 +59,13 @@ async def clear_redis_cache():
         # Пока оставим print, чтобы не прерывать все тесты при проблемах с Docker доступом в CI
 
     print("== Redis cache cleared ==")  # Для отладки, если нужно
+
+
+@pytest.fixture
+def base_url():
+    """Return the base URL for E2E testing.
+
+    By default, uses the staging environment URL unless overridden with the
+    E2E_TEST_URL environment variable.
+    """
+    return os.environ.get("E2E_TEST_URL", "https://api-staging.grimwaves.com")

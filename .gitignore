@@ -175,6 +175,7 @@ cython_debug/
 .cursor
 .cursorignore
 backups
+docs
 
 # Ignore private age keys
 **/age-key.txt
@@ -208,6 +209,7 @@ backups
 *.tfstate
 *.tfstate.backup
 .terraform/
+*.tfvars
 
 # Ignore SOPS files containing private keys
 .sops/age/keys.txt
@@ -215,11 +217,13 @@ backups
 
 # Traefik
 traefik/logs/
+logs
+*.tar.zst
 
 # Vault
 vault-agent/auth
 vault-agent/rendered
 vault-agent/sockets
 vault-agent/token
-vault-agent/templates
+
 

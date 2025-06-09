@@ -1,0 +1,362 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment to destroy'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      confirm_destroy:
+        description: 'Type "DESTROY" to confirm infrastructure destruction'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  validate:
+    name: Validate Destroy Request
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    outputs:
+      environment: ${{ steps.validate.outputs.environment }}
+    steps:
+      - name: Validate confirmation
+        id: validate
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "❌ Confirmation failed. You must type 'DESTROY' exactly to proceed."
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+          echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+
+  terraform-destroy:
+    name: Destroy Infrastructure
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: ${{ needs.validate.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Vault
+        uses: ./.github/actions/setup-vault
+        env:
+          VAULT_SERVER_IP: ${{ secrets.VAULT_SERVER_IP }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: Configure AWS CLI for DigitalOcean Spaces
+        uses: ./.github/actions/configure-aws
+
+      - name: Extract SSH Public Key
+        uses: ./.github/actions/extract-ssh-public-key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KEY_FINGERPRINT: ${{ secrets.SSH_KEY_FINGERPRINT }}
+
+      - name: Get Vault Token
+        uses: ./.github/actions/get-vault-token
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+          VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+
+      - name: Get Runner IP and Update Firewall
+        uses: ./.github/actions/get-runner-ip
+        env:
+          DO_TOKEN: ${{ secrets.DO_TOKEN }}
+
+      - name: Initialize Terraform
+        working-directory: .cicd/terraform/compute
+        env:
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: terraform init
+
+      - name: Check Current State
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Current infrastructure state ==="
+          
+          # Show current resources in state
+          if terraform state list 2>/dev/null | grep -q "."; then
+            echo "📋 Resources currently managed by Terraform:"
+            terraform state list
+            
+            echo ""
+            echo "📊 Resource summary:"
+            terraform state list | wc -l | xargs echo "Total resources:"
+          else
+            echo "ℹ️  No resources found in state for ${{ needs.validate.outputs.environment }} environment"
+            echo "This may mean:"
+            echo "  - Infrastructure was already destroyed"
+            echo "  - Wrong environment selected"
+            echo "  - State file not found"
+            exit 1
+          fi
+
+      - name: Terraform Destroy Plan
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Planning infrastructure destruction ==="
+          
+          terraform plan -destroy \
+            -var="do_token=${{ secrets.DO_TOKEN }}" \
+            -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
+            -var="ssh_public_key=${{ steps.ssh-public-key.outputs.ssh_public_key }}" \
+            -var="environment=${{ needs.validate.outputs.environment }}" \
+            -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32"]' \
+            -var="vpn_ip=${{ secrets.VPN_IP }}" \
+            -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
+            -var="ssh_port=${{ secrets.SSH_PORT || 2222 }}" \
+            -var="emergency_ssh_access=false" \
+            -out=destroyplan
+
+      - name: Terraform Destroy Apply (First Attempt)
+        id: destroy-apply-first
+        working-directory: .cicd/terraform/compute
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== ⚠️  DESTROYING INFRASTRUCTURE ⚠️  ==="
+          echo "Environment: ${{ needs.validate.outputs.environment }}"
+          echo "Initiated by: ${{ github.actor }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo ""
+          echo "🚀 Applying destroy plan..."
+          terraform apply -auto-approve destroyplan
+
+      - name: Check Destroy Status
+        id: check-status
+        if: always()
+        run: |
+          if [ "${{ steps.destroy-apply-first.outcome }}" == "success" ]; then
+            echo "✅ First destroy attempt succeeded!"
+            echo "needs_fresh_plan=false" >> $GITHUB_OUTPUT
+            echo "needs_vpc_cleanup=false" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ First destroy attempt failed, analyzing error..."
+            echo "needs_fresh_plan=true" >> $GITHUB_OUTPUT
+            echo "needs_vpc_cleanup=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Fresh Destroy Plan
+        id: fresh-plan
+        if: steps.check-status.outputs.needs_fresh_plan == 'true'
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "📋 Creating fresh destroy plan..."
+          terraform plan -destroy \
+            -var="do_token=${{ secrets.DO_TOKEN }}" \
+            -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
+            -var="ssh_public_key=${{ env.TF_VAR_ssh_public_key }}" \
+            -var="environment=${{ needs.validate.outputs.environment }}" \
+            -var='allowed_ssh_cidr_blocks=["${{ env.TF_VAR_runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
+            -var="emergency_ssh_access=false" \
+            -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
+            -var="ssh_port=${{ secrets.SSH_PORT || 2222 }}" \
+            -var="vpn_ip=${{ secrets.VPN_IP }}" \
+            -out=fresh_destroyplan
+
+      - name: Apply Fresh Destroy Plan
+        id: destroy-apply-fresh
+        if: steps.check-status.outputs.needs_fresh_plan == 'true'
+        working-directory: .cicd/terraform/compute
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "🔄 Applying fresh destroy plan..."
+          terraform apply -auto-approve fresh_destroyplan
+
+      - name: Handle VPC Cleanup
+        id: vpc-cleanup
+        if: steps.check-status.outputs.needs_vpc_cleanup == 'true' && steps.destroy-apply-fresh.outcome != 'success'
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "🔍 Checking for VPC cleanup issues..."
+          VPC_ID=$(terraform state show digitalocean_vpc.grimwaves_vpc 2>/dev/null | grep -o 'id.*=.*"[^"]*"' | cut -d'"' -f2 || echo "")
+          
+          if [ -n "$VPC_ID" ]; then
+            echo "🔍 Found VPC ID: $VPC_ID"
+            echo "Attempting manual VPC cleanup..."
+            
+            # Wait for resources to fully detach
+            echo "⏳ Waiting 30 seconds for resources to detach..."
+            sleep 30
+            
+            # Try to delete VPC manually via API
+            echo "🗑️ Attempting to delete VPC via API..."
+            VPC_DELETE_RESPONSE=$(curl -s -w "%{http_code}" -o /tmp/vpc_response.json -X DELETE \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+              "https://api.digitalocean.com/v2/vpcs/$VPC_ID")
+            
+            echo "VPC deletion response code: $VPC_DELETE_RESPONSE"
+            if [ "$VPC_DELETE_RESPONSE" -eq 204 ]; then
+              echo "✅ VPC successfully deleted via API"
+              # Remove VPC from terraform state
+              terraform state rm digitalocean_vpc.grimwaves_vpc || true
+              echo "vpc_cleanup_success=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ VPC deletion failed, response:"
+              cat /tmp/vpc_response.json || echo "No response file"
+              
+              echo "🔧 Removing VPC from state to prevent future issues..."
+              terraform state rm digitalocean_vpc.grimwaves_vpc || true
+              echo "⚠️ VPC may need manual deletion: https://cloud.digitalocean.com/networking/vpc"
+              echo "vpc_cleanup_success=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "ℹ️ No VPC found in state"
+            echo "vpc_cleanup_success=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Final Destroy Attempt
+        if: steps.vpc-cleanup.outputs.vpc_cleanup_success == 'true' && steps.destroy-apply-fresh.outcome != 'success'
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "🔄 Creating final destroy plan after VPC cleanup..."
+          terraform plan -destroy \
+            -var="do_token=${{ secrets.DO_TOKEN }}" \
+            -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
+            -var="ssh_public_key=${{ env.TF_VAR_ssh_public_key }}" \
+            -var="environment=${{ needs.validate.outputs.environment }}" \
+            -var='allowed_ssh_cidr_blocks=["${{ env.TF_VAR_runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
+            -var="emergency_ssh_access=false" \
+            -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
+            -var="ssh_port=${{ secrets.SSH_PORT || 2222 }}" \
+            -var="vpn_ip=${{ secrets.VPN_IP }}" \
+            -out=final_destroyplan
+          
+          echo "🚀 Applying final destroy plan..."
+          terraform apply -auto-approve final_destroyplan || echo "❌ Final destroy attempt failed"
+
+      - name: Verify Destruction
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Verifying infrastructure destruction ==="
+          
+          # Check if any resources remain
+          REMAINING_RESOURCES=$(terraform state list 2>/dev/null | wc -l)
+          
+          if [ "$REMAINING_RESOURCES" -eq "0" ]; then
+            echo "✅ All infrastructure successfully destroyed!"
+            echo "💰 No ongoing costs for ${{ needs.validate.outputs.environment }} environment"
+          else
+            echo "⚠️  Warning: $REMAINING_RESOURCES resources still exist:"
+            terraform state list
+            
+            # Check specifically for VPC
+            if terraform state list | grep -q "digitalocean_vpc.grimwaves_vpc"; then
+              echo ""
+              echo "🔧 VPC still exists in state, attempting final cleanup..."
+              
+              # Try to remove VPC from state if it can't be destroyed
+              VPC_ID=$(terraform state show digitalocean_vpc.grimwaves_vpc 2>/dev/null | grep -o 'id.*=.*"[^"]*"' | cut -d'"' -f2 || echo "")
+              
+              if [ -n "$VPC_ID" ]; then
+                echo "🗑️ Attempting final VPC deletion via API..."
+                if curl -s -X DELETE \
+                  -H "Content-Type: application/json" \
+                  -H "Authorization: Bearer ${{ secrets.DO_TOKEN }}" \
+                  "https://api.digitalocean.com/v2/vpcs/$VPC_ID" | grep -q '"message":"VPC not found"' || true; then
+                  echo "✅ VPC successfully deleted or already gone"
+                  terraform state rm digitalocean_vpc.grimwaves_vpc || true
+                else
+                  echo "⚠️ VPC still has dependencies, removing from state"
+                  terraform state rm digitalocean_vpc.grimwaves_vpc || true
+                  echo "🔧 You may need to manually delete VPC: $VPC_ID"
+                  echo "   https://cloud.digitalocean.com/networking/vpc"
+                fi
+              fi
+            fi
+            
+            echo ""
+            echo "This may indicate:"
+            echo "  - Some resources failed to destroy"
+            echo "  - Resources are protected from deletion"
+            echo "  - Manual cleanup required"
+          fi
+
+  notify:
+    if: ${{ false }}
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [validate, terraform-destroy]
+    # if: always()
+    steps:
+      - name: Destruction Status
+        id: status
+        run: |
+          if [[ "${{ needs.terraform-destroy.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=🗑️ Infrastructure for ${{ needs.validate.outputs.environment }} successfully destroyed!" >> $GITHUB_OUTPUT
+            echo "icon=✅" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=❌ Failed to destroy infrastructure for ${{ needs.validate.outputs.environment }}!" >> $GITHUB_OUTPUT
+            echo "icon=💥" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Email Notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "${{ steps.status.outputs.icon }} Infrastructure Destruction - ${{ steps.status.outputs.message }}"
+          body: |
+            Infrastructure Destruction Report
+            
+            Status: ${{ steps.status.outputs.status }}
+            Environment: ${{ needs.validate.outputs.environment }}
+            Initiated by: ${{ github.actor }}
+            
+            ${{ steps.status.outputs.message }}
+            
+            Workflow Details:
+            - Repository: ${{ github.repository }}
+            - Run ID: ${{ github.run_id }}
+            - Commit: ${{ github.sha }}
+            
+            View full logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ---
+            🤖 Automated notification from GrimWaves CI/CD
+          to: ${{ secrets.MAIL_RECIPIENT }}
+          from: GrimWaves CI/CD <${{ secrets.MAIL_USERNAME }}> 

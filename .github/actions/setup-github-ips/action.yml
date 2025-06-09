@@ -1,0 +1,22 @@
+name: 'Setup GitHub Actions IP Ranges'
+description: 'Get GitHub Actions IP ranges for firewall configuration'
+outputs:
+  github_ips:
+    description: 'Comma-separated list of GitHub Actions IP ranges'
+    value: ${{ steps.get-ips.outputs.github_ips }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get GitHub Actions IP Ranges
+      id: get-ips
+      shell: bash
+      run: |
+        # Get GitHub's IP ranges
+        GITHUB_META=$(curl -s https://api.github.com/meta)
+        
+        # Extract actions IP ranges
+        ACTIONS_IPS=$(echo "$GITHUB_META" | jq -r '.actions[]' | tr '\n' ',' | sed 's/,$//')
+        
+        echo "GitHub Actions IP ranges: $ACTIONS_IPS"
+        echo "github_ips=$ACTIONS_IPS" >> $GITHUB_OUTPUT 
