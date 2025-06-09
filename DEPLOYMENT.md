@@ -85,7 +85,7 @@ certificatesResolvers:
         entryPoint: web
 ```
 
-And update the `docker-compose.prod.yml` file to use this resolver.
+And update the `docker-compose.production.yml` file to use this resolver.
 
 ## Deployment
 

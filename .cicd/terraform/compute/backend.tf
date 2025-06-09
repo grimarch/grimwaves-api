@@ -6,8 +6,8 @@ terraform {
     }
     region                      = "fra1"
     bucket                      = "grimwaves-terraform-state"
-    key                         = "compute/terraform.tfstate"
-    
+    # key will be passed dynamically through -backend-config
+
     # Disable AWS-specific validations for DigitalOcean Spaces
     skip_credentials_validation = true
     skip_metadata_api_check     = true
