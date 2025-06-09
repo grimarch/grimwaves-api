@@ -364,14 +364,16 @@ jobs:
           fi
 
       - name: Fix permissions for Trivy cache
+        if: always()
         run: |
-          sudo chown -R $USER:$USER .cache/trivy
+          sudo chown -R $USER:$USER .cache/trivy || true
 
       - name: Upload vulnerability scan results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: dev-images-vulnerability-scan
+          name: docker-images-vulnerability-scan
           path: .cache/trivy/
           retention-days: 7
 

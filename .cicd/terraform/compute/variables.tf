@@ -122,3 +122,15 @@ variable "emergency_ssh_access" {
   type        = bool
   default     = false
 }
+
+variable "spaces_access_key_id" {
+  description = "DigitalOcean Spaces access key ID"
+  type        = string
+  sensitive   = true
+}
+
+variable "spaces_secret_access_key" {
+  description = "DigitalOcean Spaces secret access key"
+  type        = string
+  sensitive   = true
+}
