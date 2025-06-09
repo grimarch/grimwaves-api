@@ -2,14 +2,17 @@ VAULT_TOKEN_FILE ?= ~/.vault-token
 VAULT_ENV_SCRIPT := scripts/load_secrets_from_vault.py
 
 .PHONY: dev prod down down-clean restart-dev restart-prod logs logs-api logs-traefik prune \
-	help vault-init vault-apply vault-plan vault-edit vault-decrypt compose-logs logs-to-file logs-aggregated logs-watch flush-cache vault-check-env vault-test-connection vault-get-github-credentials
+	help vault-init vault-apply vault-plan vault-edit vault-decrypt compose-logs logs-to-file logs-aggregated logs-watch flush-cache vault-check-env vault-test-connection vault-get-github-credentials \
+	vault-ip-get vault-ip-set vault-ip-show vault-ip-test vault-github-secrets
 
 # ================= Docker Compose ====================
 
 # Default target
 all: help
 
-dev: ## Run docker compose with dev environment
+dev: ## Run docker compose with dev environment (автоматически получает IP Vault)
+	@echo "🔍 Автоматическое получение IP адреса Vault сервера..."
+	@make vault-ip-get
 	@echo "⏳⚙️  Loading secrets from Vault and building development environment..."
 	@VAULT_TOKEN=$$(cat ~/.vault-token) \
 	poetry run python scripts/load_secrets_from_vault.py | tr '\n' ' ' | \
@@ -23,11 +26,11 @@ dev-build: ## Build and run docker compose with dev environment
 
 prod: ## Run docker compose with prod environment
 	@echo "⏳ Loading secrets from Vault and starting production environment..."
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+	docker-compose -f docker-compose.yml -f docker-compose.production.yml up -d
 
 prod-build: ## Build and run docker compose with prod environment
 	@echo "⏳⚙️ Loading secrets from Vault and building production environment..."
-	docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+	docker-compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
 
 down: ## Stop all containers
 	@echo "🛑 Stopping all containers..."
@@ -415,18 +418,103 @@ vault-test-connection: vault-check-env ## Test connection to Vault server
 		exit 1; \
 	fi
 
-vault-get-github-credentials: ## Получить Role ID и Secret ID для GitHub Actions
-	@echo "🔐 Получение учетных данных для GitHub Actions..."
-	@echo "⚠️ Сохраните эти данные как секреты в GitHub Actions ⚠️"
+vault-get-github-credentials: vault-test-connection ## Get Role ID and Secret ID for GitHub Actions
+	@echo "🔐 Getting credentials for GitHub Actions..."
+	@echo "⚠️ Save these credentials as secrets in GitHub Actions ⚠️"
 	@echo "-------------------------------------------"
 	@echo "VAULT_ADDR: $(VAULT_ADDR)"
 	@echo "VAULT_ROLE_ID: $(VAULT_ROLE_ID)"
 	@echo "-------------------------------------------"
-	@echo "Опции:"
-	@echo "1) Использовать текущий Secret ID (действителен еще $(shell echo $$((604800/86400))) дней):"
-	@echo "VAULT_SECRET_ID: $(VAULT_SECRET_ID)"
+	@echo "Options:"
+	@echo "1) Use current Secret ID (valid for $(shell echo $$((604800/86400))) days):"
 	@echo ""
-	@echo "2) Получить новый Secret ID:"
+	@echo "2) Get new Secret ID:"
 	@echo "   make vault-rotate-secret-id && make vault-get-github-credentials"
 	@echo "-------------------------------------------"
-	@echo "✅ Готово! Скопируйте эти значения в GitHub Secrets"
+	@echo "✅ Done! Copy these values to GitHub Secrets"
+
+# ==============================================================================
+# VAULT IP MANAGEMENT
+# ==============================================================================
+
+vault-ip-get: ## Automatically get Vault server IP from Terraform and update .env
+	@echo "🔍 Getting Vault server IP from Terraform..."
+	@chmod +x scripts/get-vault-ip.sh
+	@./scripts/get-vault-ip.sh
+
+vault-ip-set: ## Set Vault server IP manually (usage: make vault-ip-set IP=1.2.3.4)
+	@if [ -z "$(IP)" ]; then \
+		echo "❌ Error: IP address not specified"; \
+		echo "   Usage: make vault-ip-set IP=1.2.3.4"; \
+		exit 1; \
+	fi
+	@echo "📝 Setting Vault server IP: $(IP)"
+	@if [ ! -f ".env" ]; then \
+		echo "# Vault configuration" > .env; \
+		echo "VAULT_SERVER_IP=$(IP)" >> .env; \
+		echo "VAULT_ADDR=https://vault-docker-lab1.vault-docker-lab.lan:8200" >> .env; \
+		echo "VAULT_PROJECT_NAME=learn-vault-lab" >> .env; \
+		echo "ENVIRONMENT=development" >> .env; \
+		echo "✅ New .env file created with IP: $(IP)"; \
+	else \
+		if grep -q "VAULT_SERVER_IP=" .env; then \
+			sed -i "s/VAULT_SERVER_IP=.*/VAULT_SERVER_IP=$(IP)/" .env; \
+		else \
+			echo "VAULT_SERVER_IP=$(IP)" >> .env; \
+		fi; \
+		echo "✅ Updated VAULT_SERVER_IP in .env: $(IP)"; \
+	fi
+	@echo "🚀 Export the variable: export VAULT_SERVER_IP=$(IP)"
+
+vault-ip-show: ## Show current Vault server IP
+	@echo "🔍 Current Vault server IP configuration:"
+	@if [ -f ".env" ] && grep -q "VAULT_SERVER_IP=" .env; then \
+		echo "   From .env file: $$(grep VAULT_SERVER_IP= .env | cut -d= -f2)"; \
+	else \
+		echo "   .env file not found or does not contain VAULT_SERVER_IP"; \
+	fi
+	@if [ -n "$$VAULT_SERVER_IP" ]; then \
+		echo "   From environment variable: $$VAULT_SERVER_IP"; \
+	else \
+		echo "   Environment variable VAULT_SERVER_IP is not set"; \
+	fi
+	@echo ""
+	@echo "💡 Commands for management:"
+	@echo "   make vault-ip-get         # Get from Terraform"
+	@echo "   make vault-ip-set IP=X.X.X.X  # Set manually"
+
+vault-ip-test: ## Test connection to Vault server by current IP
+	@echo "🔍 Testing connection to Vault server..."
+	@if [ ! -f ".env" ] || ! grep -q "VAULT_SERVER_IP=" .env; then \
+		echo "❌ VAULT_SERVER_IP is not set in .env file"; \
+		echo "   Run: make vault-ip-get or make vault-ip-set IP=X.X.X.X"; \
+		exit 1; \
+	fi
+	@VAULT_IP=$$(grep VAULT_SERVER_IP= .env | cut -d= -f2); \
+	echo "📡 Testing connection to $$VAULT_IP:8200..."; \
+	if timeout 5 bash -c "</dev/tcp/$$VAULT_IP/8200" 2>/dev/null; then \
+		echo "✅ Vault server is accessible at $$VAULT_IP:8200"; \
+	else \
+		echo "❌ Vault server is not accessible at $$VAULT_IP:8200"; \
+		echo "   Check IP address and server status"; \
+		exit 1; \
+	fi
+
+vault-github-secrets: ## Show all values for GitHub Secrets (including IP)
+	@echo "🔐 Values for GitHub Actions Secrets:"
+	@echo "======================================"
+	@make vault-ip-get > /dev/null 2>&1 || true
+	@if [ -f ".env" ] && grep -q "VAULT_SERVER_IP=" .env; then \
+		VAULT_IP=$$(grep VAULT_SERVER_IP= .env | cut -d= -f2); \
+		echo "VAULT_SERVER_IP: $$VAULT_IP"; \
+		echo "VAULT_ADDR (Option 1): https://$$VAULT_IP:8200"; \
+		echo "VAULT_ADDR (Option 2): https://vault-docker-lab1.vault-docker-lab.lan:8200"; \
+	else \
+		echo "❌ Failed to get VAULT_SERVER_IP"; \
+	fi
+	@echo ""
+	@echo "🔑 Vault AppRole credentials:"
+	@make vault-get-github-credentials 2>/dev/null | grep -E "(VAULT_ROLE_ID|VAULT_SECRET_ID)" || echo "❌ Failed to get Vault credentials"
+	@echo ""
+	@echo "📋 Copy these values to GitHub Settings > Secrets and variables > Actions"
+	@echo "📖 Detailed instructions: docs/cicd/github_secrets_setup.md"

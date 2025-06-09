@@ -6,7 +6,7 @@ services:
     container_name: vault-agent
     restart: unless-stopped
     environment:
-      - VAULT_ADDR=${VAULT_ADDR:-vault-docker-lab1.vault-docker-lab.lan:8200}
+      - VAULT_ADDR=${VAULT_ADDR:-https://vault-docker-lab1.vault-docker-lab.lan:8200}
       - VAULT_ROLE_ID
       - VAULT_WRAPPED_SECRET_ID
       - VAULT_SECRET_ID
@@ -19,7 +19,7 @@ services:
       - grimwaves-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
-      - "vault-docker-lab1.vault-docker-lab.lan:host-gateway"
+      - "vault-docker-lab1.vault-docker-lab.lan:${VAULT_SERVER_IP:-127.0.0.1}"
     healthcheck:
       test: ["CMD", "ls", "/vault-agent/token/vault-token"]
       interval: 30s
@@ -29,7 +29,7 @@ services:
 
 
   traefik:
-    image: traefik:v3.3
+    image: traefik:v3.4
     container_name: grimwaves-traefik
     ports:
       - "80:80"      # HTTP
@@ -74,9 +74,10 @@ services:
       - grimwaves-network
     restart: unless-stopped
     depends_on:
-      - vault-agent
-      - traefik
-      - redis
+      vault-agent:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -131,8 +132,10 @@ services:
       - grimwaves-network
     restart: unless-stopped
     depends_on:
-      - redis
-      - api
+      vault-agent:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:

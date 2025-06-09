@@ -1,0 +1,731 @@
+name: Deploy to DigitalOcean
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment for deployment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      tag:
+        description: 'Docker image tag to deploy (default: latest)'
+        required: false
+        default: 'latest'
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  prepare:
+    name: Prepare for Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      tag: ${{ steps.set-tag.outputs.tag }}
+    steps:
+      - name: Set environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            # Auto-deploy only to staging environment on push to master
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set image tag
+        id: set-tag
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.tag }}" != "latest" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            # For automated pushes to master, use the commit SHA
+            echo "tag=sha-${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+  terraform:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: prepare
+    # Use GitHub Environment - this enables environment-specific secrets and protection rules
+    environment: ${{ needs.prepare.outputs.environment }}
+    outputs:
+      token: ${{ steps.vault-token.outputs.token }}
+      droplet_ip: ${{ steps.terraform-outputs.outputs.droplet_ip }}
+      app_url: ${{ steps.terraform-outputs.outputs.app_url }}
+      ssh_port: ${{ steps.terraform-outputs.outputs.ssh_port }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Vault
+        uses: ./.github/actions/setup-vault
+        env:
+          VAULT_SERVER_IP: ${{ secrets.VAULT_SERVER_IP }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: Configure AWS CLI for DigitalOcean Spaces
+        uses: ./.github/actions/configure-aws
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Get Vault Token
+        id: vault-token
+        uses: ./.github/actions/get-vault-token
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
+          VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+
+      - name: Get Runner IP and Update Firewall
+        id: runner-ip
+        uses: ./.github/actions/get-runner-ip
+        env:
+          DO_TOKEN: ${{ secrets.DO_TOKEN }}
+
+      - name: Extract SSH Public Key
+        id: ssh-public-key
+        uses: ./.github/actions/extract-ssh-public-key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KEY_FINGERPRINT: ${{ secrets.SSH_KEY_FINGERPRINT }}
+
+      - name: Initialize Terraform
+        working-directory: .cicd/terraform/compute
+        env:
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: terraform init
+
+      - name: Debug Backend Configuration
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Backend Configuration Debug ==="
+          
+          # Check if local state exists (fallback mode)
+          if [ -f terraform.tfstate ]; then
+            echo "❌ WARNING: Local terraform.tfstate file exists!"
+            ls -la terraform.tfstate
+          else
+            echo "✅ No local terraform.tfstate found"
+          fi
+          
+          # Check .terraform directory
+          echo "=== .terraform directory contents ==="
+          ls -la .terraform/ || echo "No .terraform directory"
+          
+          # Check backend configuration
+          if [ -f .terraform/terraform.tfstate ]; then
+            echo "=== Backend state file ==="
+            cat .terraform/terraform.tfstate
+          else
+            echo "❌ No .terraform/terraform.tfstate found"
+          fi
+          
+          # Test S3 connection manually
+          echo "=== Testing S3 connection ==="
+          
+          # Try to list bucket contents
+          aws s3 ls s3://grimwaves-terraform-state/ \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            || echo "❌ Failed to list bucket contents"
+          
+          # Test write access to bucket
+          echo "test-$(date)" > test-connection.txt
+          aws s3 cp test-connection.txt s3://grimwaves-terraform-state/test-connection.txt \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            && echo "✅ Successfully wrote test file" \
+            || echo "❌ Failed to write test file"
+          
+          # Clean up test file locally and remotely
+          rm -f test-connection.txt
+          aws s3 rm s3://grimwaves-terraform-state/test-connection.txt \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            2>/dev/null || echo "Test file already cleaned up"
+
+      - name: Terraform Plan
+        working-directory: .cicd/terraform/compute
+        env:
+          # Use environment variables from GitHub Environment if available
+          TF_VAR_blue_green_enabled: ${{ vars.BLUE_GREEN_DEPLOYMENT || 'false' }}
+          # Optional: Override domain if needed via GitHub Environment variables
+          TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || '' }}
+          # SSH port configuration - use secret or default
+          TF_VAR_ssh_port: ${{ secrets.SSH_PORT || '2222' }}
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          # Debug SSH public key (first 50 chars for security)
+          echo "=== SSH Public Key Debug ==="
+          SSH_KEY="${{ steps.ssh-public-key.outputs.ssh_public_key }}"
+          if [ -n "$SSH_KEY" ]; then
+            echo "✅ SSH public key found (length: ${#SSH_KEY})"
+            echo "Key type: $(echo "$SSH_KEY" | cut -d' ' -f1)"
+            echo "Key preview: $(echo "$SSH_KEY" | cut -c1-50)..."
+          else
+            echo "❌ SSH public key is empty!"
+            exit 1
+          fi
+          
+          # Use dynamic IP for CI/CD runner instead of 0.0.0.0/0
+          terraform plan \
+            -var="do_token=${{ secrets.DO_TOKEN }}" \
+            -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
+            -var="ssh_port=${TF_VAR_ssh_port}" \
+            -var="ssh_public_key=${{ steps.ssh-public-key.outputs.ssh_public_key }}" \
+            -var="environment=${{ needs.prepare.outputs.environment }}" \
+            -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32"]' \
+            -var="vpn_ip=${{ secrets.VPN_IP }}" \
+            -var="emergency_ssh_access=true" \
+            -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: .cicd/terraform/compute
+        env:
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Verify State File Upload
+        working-directory: .cicd/terraform/compute
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "=== Verifying state file was uploaded to bucket ==="
+          
+          # Check if local state file exists (should not exist with remote backend)
+          if [ -f terraform.tfstate ]; then
+            echo "❌ CRITICAL: Local terraform.tfstate exists! Remote backend failed!"
+            echo "Local state file size: $(wc -c < terraform.tfstate)"
+            echo "This means Terraform used local backend as fallback"
+            exit 1
+          else
+            echo "✅ No local terraform.tfstate found (good)"
+          fi
+          
+          # Try to list bucket contents to verify state file exists
+          echo "=== Checking bucket contents ==="
+          aws s3 ls s3://grimwaves-terraform-state/ \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            --recursive || echo "❌ Failed to list bucket contents"
+          
+          # Check specifically for our state file
+          if aws s3 ls s3://grimwaves-terraform-state/compute/terraform.tfstate \
+            --endpoint-url=https://fra1.digitaloceanspaces.com; then
+            echo "✅ State file found in bucket!"
+            
+            # Get file size
+            aws s3 ls s3://grimwaves-terraform-state/compute/terraform.tfstate \
+              --endpoint-url=https://fra1.digitaloceanspaces.com \
+              --human-readable --summarize
+          else
+            echo "❌ CRITICAL: State file NOT found in bucket!"
+            echo "This indicates Terraform did not upload state to remote backend"
+            exit 1
+          fi
+          
+          # Try to read the state file to verify it contains our resources
+          echo "=== Verifying state file contents ==="
+          aws s3 cp s3://grimwaves-terraform-state/compute/terraform.tfstate - \
+            --endpoint-url=https://fra1.digitaloceanspaces.com \
+            | jq '.resources[] | select(.type == "digitalocean_project") | .instances[0].attributes.name' \
+            || echo "❌ Failed to read/parse state file"
+
+      - name: Get Outputs
+        id: terraform-outputs
+        working-directory: .cicd/terraform/compute
+        env:
+          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          echo "droplet_ip=$(terraform output -raw droplet_ipv4)" >> $GITHUB_OUTPUT
+          echo "app_url=$(terraform output -raw app_url)" >> $GITHUB_OUTPUT
+          echo "ssh_port=$(terraform output -raw ssh_port)" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy Application
+    runs-on: ubuntu-latest
+    needs: [prepare, terraform]
+    # Use GitHub Environment - this enables environment-specific secrets and protection rules
+    environment: ${{ needs.prepare.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Wait for Droplet Initialization
+        run: |
+          echo "⏳ Waiting for droplet cloud-init to complete..."
+          echo "Droplet IP: ${{ needs.terraform.outputs.droplet_ip }}"
+          echo "SSH Port: ${{ needs.terraform.outputs.ssh_port }}"
+          
+          echo "Waiting for 60 seconds to ensure droplet is initialized..."
+          sleep 60
+          # Wait for SSH to become available first
+          echo "Testing SSH port availability..."
+          for i in {1..30}; do
+            if timeout 10 bash -c "</dev/tcp/${{ needs.terraform.outputs.droplet_ip }}/${{ needs.terraform.outputs.ssh_port }}"; then
+              echo "✅ SSH port ${{ needs.terraform.outputs.ssh_port }} is now available!"
+              break
+            else
+              echo "⏳ Attempt $i: SSH port not ready yet, waiting 15 seconds..."
+              sleep 15
+              if [ $i -eq 20 ]; then
+                echo "❌ SSH port failed to become available after 5 minutes"
+                exit 1
+              fi
+            fi
+          done
+          
+          # Setup SSH key for diagnostics
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Add SSH debugging function
+          ssh_debug() {
+            echo "🔍 SSH Connection Debug:"
+            echo "  Target: deploy@${{ needs.terraform.outputs.droplet_ip }}:${{ needs.terraform.outputs.ssh_port }}"
+            echo "  Key fingerprint: $(ssh-keygen -l -f ~/.ssh/deploy_key | awk '{print $2}')"
+            
+            # Test SSH connection with verbose output (first attempt only)
+            if [ "$1" = "1" ]; then
+              echo "  Testing SSH connection with verbose output..."
+              ssh -vvv -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                  -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
+                  -p ${{ needs.terraform.outputs.ssh_port }} \
+                  deploy@${{ needs.terraform.outputs.droplet_ip }} \
+                  "echo 'SSH connection successful'" 2>&1 | head -50 || echo "SSH connection failed"
+            fi
+          }
+          
+          # Now wait for cloud-init to complete by checking signal file
+          echo "Checking cloud-init completion status..."
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                   -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
+                   -p ${{ needs.terraform.outputs.ssh_port }} \
+                   deploy@${{ needs.terraform.outputs.droplet_ip }} \
+                   "test -f /tmp/cloud_init_done"; then
+              echo "✅ Cloud-init completed successfully!"
+              break
+            else
+              # Show debug info only on first few attempts
+              if [ $i -le 3 ]; then
+                ssh_debug "$i"
+              fi
+              
+              echo "⏳ Attempt $i: Cloud-init still running, waiting 20 seconds..."
+              sleep 20
+              if [ $i -eq 30 ]; then
+                echo "❌ Cloud-init failed to complete after 10 minutes"
+                
+                # Final debug attempt
+                ssh_debug "final"
+                
+                # Try to check what keys are authorized on the server
+                echo "🔍 Checking authorized keys on server (as root)..."
+                ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                    -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
+                    -p ${{ needs.terraform.outputs.ssh_port }} \
+                    root@${{ needs.terraform.outputs.droplet_ip }} \
+                    "echo 'Root authorized_keys:'; cat /root/.ssh/authorized_keys 2>/dev/null || echo 'No root authorized_keys'; echo 'Deploy authorized_keys:'; cat /home/deploy/.ssh/authorized_keys 2>/dev/null || echo 'No deploy authorized_keys'" || echo "Could not check authorized keys"
+                
+                # Show cloud-init logs for debugging
+                ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                    -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
+                    -p ${{ needs.terraform.outputs.ssh_port }} \
+                    root@${{ needs.terraform.outputs.droplet_ip }} \
+                    "sudo tail -100 /var/log/cloud-init-output.log" || echo "Could not get cloud-init logs"
+                
+                exit 1
+              fi
+            fi
+          done
+          
+          # Clean up SSH key
+          rm -f ~/.ssh/deploy_key
+
+      - name: Get SSH Key from GitHub Secrets
+        id: ssh-key
+        run: |
+          # Setup SSH key from GitHub secrets
+          mkdir -p ~/.ssh
+          
+          # Get SSH private key from GitHub secrets instead of Vault
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          
+          # Setup known_hosts dynamically using ssh-keyscan with custom port
+          touch ~/.ssh/known_hosts
+          echo "🔑 Adding droplet to known_hosts (port ${{ needs.terraform.outputs.ssh_port }})..."
+          
+          # Retry ssh-keyscan a few times as droplet might still be starting
+          for i in {1..5}; do
+            if ssh-keyscan -p ${{ needs.terraform.outputs.ssh_port }} -H "${{ needs.terraform.outputs.droplet_ip }}" >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "✅ Successfully added droplet to known_hosts"
+              break
+            else
+              echo "⏳ Attempt $i failed, waiting 10 seconds..."
+              sleep 10
+            fi
+          done
+          
+          # Configure SSH to use custom port from Terraform
+          echo "🔧 Configuring SSH to use custom port ${{ needs.terraform.outputs.ssh_port }}..."
+          cat >> ~/.ssh/config << EOF
+          Host ${{ needs.terraform.outputs.droplet_ip }}
+            Port ${{ needs.terraform.outputs.ssh_port }}
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+          EOF
+          
+          echo "🔧 SSH configuration complete (port ${{ needs.terraform.outputs.ssh_port }})"
+
+      - name: Copy Docker Compose files
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+        run: |
+          # Prepare docker-compose files
+          echo "🔧 Preparing docker-compose files..."
+          echo "Environment: $ENVIRONMENT"
+          
+          # Set environment-specific compose file
+          TARGET_COMPOSE="docker-compose.yml docker-compose.${ENVIRONMENT}.yml"
+          
+          echo "🔧 Using docker-compose.${ENVIRONMENT}.yml for deployment"
+          echo "Target compose files: $TARGET_COMPOSE"
+          
+          # Update Makefile to use environment-specific compose file
+          sed -i "s/docker-compose.dev.yml/docker-compose.${ENVIRONMENT}.yml/g" Makefile
+          
+          # Copy files to remote server using custom port from Terraform
+          scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE Dockerfile Makefile .dockerignore pyproject.toml README.md deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+          # Copy grimwaves_api directory to remote server
+          scp -P ${{ needs.terraform.outputs.ssh_port }} -r grimwaves_api deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+          # Copy data directory to remote server
+          scp -P ${{ needs.terraform.outputs.ssh_port }} -r data deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
+
+
+      - name: Configure Vault Agent
+        run: |
+          # Create role_id and secret_id files
+          echo "${{ secrets.VAULT_ROLE_ID }}" > role_id.tmp
+          echo "${{ secrets.VAULT_SECRET_ID }}" > secret_id.tmp
+
+          # Copy to server using custom port from Terraform
+          scp -P ${{ needs.terraform.outputs.ssh_port }} vault-agent/Dockerfile vault-agent/entrypoint.sh deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/
+          scp -P ${{ needs.terraform.outputs.ssh_port }} vault-agent/templates/* deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/templates/
+
+          scp -P ${{ needs.terraform.outputs.ssh_port }} role_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/role-id
+          scp -P ${{ needs.terraform.outputs.ssh_port }} secret_id.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/auth/secret-id
+          
+          # Clean up
+          rm role_id.tmp secret_id.tmp
+
+      - name: Copy Vault Certificates
+        run: |
+          echo "📋 Copying Vault CA certificates from Vault server..."
+          
+          # Extract Vault server IP from secrets
+          VAULT_SERVER_IP="${{ secrets.VAULT_SERVER_IP }}"
+          VAULT_SSH_PORT="2222"  # Default SSH port for vault server
+          
+          echo "Vault server IP: $VAULT_SERVER_IP"
+          
+          # Setup SSH key for vault server (same key should work for both servers)
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/vault_key
+          chmod 600 ~/.ssh/vault_key
+          
+          # Create certs directory on target server
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p ${{ needs.terraform.outputs.ssh_port }} \
+              deploy@${{ needs.terraform.outputs.droplet_ip }} \
+              "mkdir -p /var/app/grimwaves/vault-agent/certs"
+          
+          # Try to copy CA certificate from Vault server (try multiple possible paths)
+          echo "🔐 Copying CA certificate from Vault server..."
+          CERT_FOUND=false
+          
+          # Possible certificate paths on Vault server
+          CERT_PATHS=(
+            "/opt/vault_lab/containers/vault_docker_lab_1/certs/vault_docker_lab_ca.pem"
+            "/opt/vault_lab/certs/vault_docker_lab_ca.pem"
+            "/opt/vault_lab/containers/vault_docker_lab_2/certs/vault_docker_lab_ca.pem"
+            "/etc/vault/certs/ca.pem"
+          )
+          
+          for cert_path in "${CERT_PATHS[@]}"; do
+            echo "Trying to copy from: $cert_path"
+            if scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                   -i ~/.ssh/vault_key \
+                   -P $VAULT_SSH_PORT \
+                   vaultadmin@$VAULT_SERVER_IP:$cert_path \
+                   ./vault_ca.pem 2>/dev/null; then
+              echo "✅ Found certificate at: $cert_path"
+              CERT_FOUND=true
+              break
+            else
+              echo "❌ Certificate not found at: $cert_path"
+            fi
+          done
+          
+          if [ "$CERT_FOUND" = "true" ]; then
+            # Copy CA certificate to GrimWaves server  
+            echo "📤 Uploading CA certificate to GrimWaves server..."
+            scp -P ${{ needs.terraform.outputs.ssh_port }} \
+                ./vault_ca.pem \
+                deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/vault-agent/certs/vault_docker_lab_ca.pem
+            echo "✅ Vault CA certificate copied successfully"
+          else
+            echo "⚠️  Could not find Vault CA certificate on server"
+            echo "Will configure Vault Agent to skip TLS verification as fallback"
+            
+            # Create a placeholder cert file and configure tls_skip_verify
+            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -p ${{ needs.terraform.outputs.ssh_port }} \
+                deploy@${{ needs.terraform.outputs.droplet_ip }} \
+                "echo '# Placeholder - TLS verification disabled' > /var/app/grimwaves/vault-agent/certs/vault_docker_lab_ca.pem"
+          fi
+          
+          # Clean up local temp files
+          rm -f ./vault_ca.pem ~/.ssh/vault_key
+
+      - name: Configure traefik
+        run: |
+          # Copy traefik files to remote server
+          scp -P ${{ needs.terraform.outputs.ssh_port }} -r traefik deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves
+
+      - name: Test Network Connectivity
+        run: |
+          VAULT_SERVER_IP="${{ secrets.VAULT_SERVER_IP }}"
+          
+          echo "🔍 Testing network connectivity to Vault server..."
+          echo "Vault server IP: $VAULT_SERVER_IP"
+          
+          # Setup SSH key for vault server diagnostics
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/vault_key
+          chmod 600 ~/.ssh/vault_key
+          
+          # First add the DNS entry to /etc/hosts
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p ${{ needs.terraform.outputs.ssh_port }} \
+              deploy@${{ needs.terraform.outputs.droplet_ip }} \
+              "sudo sh -c '
+                 # Remove any existing entries for vault domains to avoid duplicates
+                 sed -i \"/vault-docker-lab/d\" /etc/hosts
+                 # Add new entry  
+                 echo \"$VAULT_SERVER_IP vault-docker-lab1.vault-docker-lab.lan\" >> /etc/hosts
+                 echo \"DNS mapping added to /etc/hosts\"
+               '"
+          
+          # Test connectivity from GrimWaves server to Vault server
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p ${{ needs.terraform.outputs.ssh_port }} \
+              deploy@${{ needs.terraform.outputs.droplet_ip }} \
+              "echo '=== Network connectivity test ==='; \
+               echo 'Testing ping to Vault server IP...'; \
+               ping -c 3 $VAULT_SERVER_IP || echo 'Ping to IP failed'; \
+               echo 'Testing ping to Vault domain...'; \
+               ping -c 3 vault-docker-lab1.vault-docker-lab.lan || echo 'Ping to domain failed'; \
+               echo 'Testing port 8200 via IP...'; \
+               nc -zvw 3 $VAULT_SERVER_IP 8200 || echo 'Port 8200 via IP not reachable'; \
+               echo 'Testing port 8200 via domain...'; \
+               nc -zvw 3 vault-docker-lab1.vault-docker-lab.lan 8200 || echo 'Port 8200 via domain not reachable'; \
+               echo 'Testing DNS resolution...'; \
+               nslookup vault-docker-lab1.vault-docker-lab.lan || echo 'DNS resolution failed'; \
+               echo 'Current /etc/hosts vault entries:'; \
+               grep vault /etc/hosts || echo 'No vault entries found'; \
+               echo 'GrimWaves server public IP:'; \
+               curl -s https://ifconfig.me || echo 'Could not get public IP'"
+          
+          # Clean up SSH key
+          rm -f ~/.ssh/vault_key
+
+      - name: Run Deployment
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+        run: |
+          # Check if certificate was successfully copied
+          VAULT_SKIP_VERIFY="false"
+          if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                 -p ${{ needs.terraform.outputs.ssh_port }} \
+                 deploy@${{ needs.terraform.outputs.droplet_ip }} \
+                 "grep -q '# Placeholder' /var/app/grimwaves/vault-agent/certs/vault_docker_lab_ca.pem 2>/dev/null"; then
+            echo "⚠️  Using TLS skip verify mode (certificate not found)"
+            VAULT_SKIP_VERIFY="true"
+          else
+            echo "✅ Using TLS with CA certificate verification"
+            VAULT_SKIP_VERIFY="false"
+          fi
+          
+          # Setup proper DNS resolution and VAULT_ADDR using domain name
+          VAULT_SERVER_IP="${{ secrets.VAULT_SERVER_IP }}"
+          VAULT_ADDR="https://vault-docker-lab1.vault-docker-lab.lan:8200"
+          
+          echo "🔧 Configuring Vault connection:"
+          echo "  Server IP: $VAULT_SERVER_IP"
+          echo "  Vault Address: $VAULT_ADDR"
+          echo "  TLS Skip Verify: $VAULT_SKIP_VERIFY"
+          
+          # Add DNS resolution for Vault domain in /etc/hosts
+          echo "📝 Adding Vault domain to /etc/hosts..."
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p ${{ needs.terraform.outputs.ssh_port }} \
+              deploy@${{ needs.terraform.outputs.droplet_ip }} \
+              "sudo sh -c '
+                # Remove any existing entries for vault domains to avoid duplicates
+                sed -i \"/vault-docker-lab/d\" /etc/hosts
+                # Add new entry
+                echo \"$VAULT_SERVER_IP vault-docker-lab1.vault-docker-lab.lan\" >> /etc/hosts
+                echo \"Updated /etc/hosts with Vault domain mapping\"
+                echo \"Current vault entries:\"
+                grep vault /etc/hosts || echo \"No vault entries found\"
+              '"
+          
+          # Create .env file with the image tag and environment-specific variables
+          {
+            echo "DOCKER_TAG=${{ needs.prepare.outputs.tag }}"
+            echo "ENVIRONMENT=$ENVIRONMENT"
+            echo "VAULT_SERVER_IP=$VAULT_SERVER_IP"
+            echo "VAULT_ADDR=$VAULT_ADDR"
+            echo "VAULT_SKIP_VERIFY=$VAULT_SKIP_VERIFY"
+            echo "VAULT_ROLE_NAME=grimwaves-role"
+
+            # Add any environment-specific variables from GitHub Environment
+            if [ -n "${{ vars.ADDITIONAL_ENV_VARS }}" ]; then
+              echo "${{ vars.ADDITIONAL_ENV_VARS }}"
+            fi
+          } > .env.tmp
+          
+          scp -P ${{ needs.terraform.outputs.ssh_port }} .env.tmp deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/.env
+          # Run deployment script using custom port from Terraform
+          ssh -p ${{ needs.terraform.outputs.ssh_port }} deploy@${{ needs.terraform.outputs.droplet_ip }} 'cd /var/app/grimwaves && sudo make compose-up'
+          
+          # Clean up
+          rm .env.tmp
+
+      - name: Verify Deployment
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          DROPLET_IP: ${{ needs.terraform.outputs.droplet_ip }}
+        run: |
+          # Wait for services to start
+          echo "Waiting for services to start..."
+          sleep 30
+          
+          # Determine health check URL based on environment
+          if [ "$ENVIRONMENT" == "staging" ]; then
+            DOMAIN="staging-grimwaves.duckdns.org"
+            HEALTH_URL="${DOMAIN}/health"
+          elif [ "$ENVIRONMENT" == "production" ]; then
+            DOMAIN="grimwaves.duckdns.org"
+            HEALTH_URL="${DOMAIN}/health"
+          else
+            DOMAIN="${{ needs.terraform.outputs.app_url }}"
+            HEALTH_URL="${DOMAIN}/health"
+          fi
+
+          echo "Domain: $DOMAIN"
+          echo "Health check URL: $HEALTH_URL"
+
+          curl -sSf -k --retry 5 --retry-delay 10 \
+            --resolve $DOMAIN:443:$DROPLET_IP \
+            "https://$HEALTH_URL" \
+            || (echo "❌ Service health check failed" && exit 1)
+          
+          echo "✅ Deployment completed successfully!"
+
+  notify:
+    if: ${{ false }}
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [prepare, terraform, deploy]
+    # if: always()
+    # Note: This job does not use an environment context but still accesses environment-specific secrets
+    steps:
+      - name: Deployment Status
+        id: status
+        run: |
+          if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=✅ Deployment to ${{ needs.prepare.outputs.environment }} succeeded!" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=❌ Deployment to ${{ needs.prepare.outputs.environment }} failed!" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Email Notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: ${{ steps.status.outputs.message }}
+          body: |
+            Deployment Status: ${{ steps.status.outputs.status }}
+            Environment: ${{ needs.prepare.outputs.environment }}
+            Image Tag: ${{ needs.prepare.outputs.tag }}
+            Application URL: ${{ needs.terraform.outputs.app_url }}
+            
+            See details at: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          to: ${{ secrets.MAIL_RECIPIENT }}
+          from: GrimWaves CI/CD <${{ secrets.MAIL_USERNAME }}>
+
+  e2e_tests:
+    if: ${{ false }}
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: deploy
+    environment: ${{ needs.prepare.outputs.environment }}
+    # Only run E2E tests for staging environment
+    # if: needs.prepare.outputs.environment == 'staging'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: ./.github/actions/setup-python-poetry
+        
+      - name: Wait for deployment to stabilize
+        run: |
+          echo "Waiting for 30 seconds to ensure deployment is stable..."
+          sleep 30
+        
+      - name: Run E2E Tests
+        env:
+          E2E_TEST_URL: https://api-staging.grimwaves.com
+        run: |
+          poetry run pytest tests/e2e/ -v
+          
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: |
+            .pytest_cache/
+            pytest-report.xml
+          retention-days: 7 

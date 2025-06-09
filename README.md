@@ -63,7 +63,7 @@ grimwaves-api/
 ├── logs/               # Application logs (mounted as volume)
 ├── docker-compose.yml  # Base Docker Compose configuration
 ├── docker-compose.dev.yml  # Development overrides
-├── docker-compose.prod.yml # Production overrides
+├── docker-compose.production.yml # Production overrides
 ├── Dockerfile          # Container definition
 ├── Makefile            # Helpful commands
 └── README.md           # This file
