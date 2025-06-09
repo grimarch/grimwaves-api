@@ -107,7 +107,10 @@ jobs:
           # Credentials for DigitalOcean Spaces (S3-compatible backend)
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        run: terraform init
+        run: |
+          # Create backend config with environment-specific key
+          echo "key=compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate" > backend.conf
+          terraform init -backend-config=backend.conf
 
       - name: Debug Backend Configuration
         working-directory: .cicd/terraform/compute
@@ -167,9 +170,12 @@ jobs:
           TF_VAR_domain_name: ${{ vars.DEPLOYMENT_DOMAIN || '' }}
           # SSH port configuration - use secret or default
           TF_VAR_ssh_port: ${{ secrets.SSH_PORT || '2222' }}
-          # Credentials for DigitalOcean Spaces (S3-compatible backend)
+          # Credentials for DigitalOcean Spaces (S3-compatible backend and Spaces resources)
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Pass DigitalOcean Spaces credentials for Terraform provider
+          SPACES_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          SPACES_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           # Debug SSH public key (first 50 chars for security)
           echo "=== SSH Public Key Debug ==="
@@ -183,6 +189,9 @@ jobs:
             exit 1
           fi
           
+          # Ensure backend config exists for plan
+          echo "key=compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate" > backend.conf
+          
           # Use dynamic IP for CI/CD runner instead of 0.0.0.0/0
           terraform plan \
             -var="do_token=${{ secrets.DO_TOKEN }}" \
@@ -194,6 +203,8 @@ jobs:
             -var="vpn_ip=${{ secrets.VPN_IP }}" \
             -var="emergency_ssh_access=true" \
             -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
+            -var="spaces_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            -var="spaces_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -202,7 +213,10 @@ jobs:
           # Credentials for DigitalOcean Spaces (S3-compatible backend)
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        run: terraform apply -auto-approve tfplan
+        run: |
+          # Ensure backend config exists for apply
+          echo "key=compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate" > backend.conf
+          terraform apply -auto-approve tfplan
 
       - name: Verify State File Upload
         working-directory: .cicd/terraform/compute
@@ -228,24 +242,25 @@ jobs:
             --endpoint-url=https://fra1.digitaloceanspaces.com \
             --recursive || echo "❌ Failed to list bucket contents"
           
-          # Check specifically for our state file
-          if aws s3 ls s3://grimwaves-terraform-state/compute/terraform.tfstate \
+          # Check specifically for our environment-specific state file
+          STATE_FILE_PATH="compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate"
+          if aws s3 ls s3://grimwaves-terraform-state/$STATE_FILE_PATH \
             --endpoint-url=https://fra1.digitaloceanspaces.com; then
-            echo "✅ State file found in bucket!"
+            echo "✅ State file found in bucket: $STATE_FILE_PATH"
             
             # Get file size
-            aws s3 ls s3://grimwaves-terraform-state/compute/terraform.tfstate \
+            aws s3 ls s3://grimwaves-terraform-state/$STATE_FILE_PATH \
               --endpoint-url=https://fra1.digitaloceanspaces.com \
               --human-readable --summarize
           else
-            echo "❌ CRITICAL: State file NOT found in bucket!"
+            echo "❌ CRITICAL: State file NOT found in bucket: $STATE_FILE_PATH"
             echo "This indicates Terraform did not upload state to remote backend"
             exit 1
           fi
           
           # Try to read the state file to verify it contains our resources
           echo "=== Verifying state file contents ==="
-          aws s3 cp s3://grimwaves-terraform-state/compute/terraform.tfstate - \
+          aws s3 cp s3://grimwaves-terraform-state/$STATE_FILE_PATH - \
             --endpoint-url=https://fra1.digitaloceanspaces.com \
             | jq '.resources[] | select(.type == "digitalocean_project") | .instances[0].attributes.name' \
             || echo "❌ Failed to read/parse state file"
@@ -258,6 +273,8 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
+          # Ensure backend config exists for outputs
+          echo "key=compute/${{ needs.prepare.outputs.environment }}/terraform.tfstate" > backend.conf
           echo "droplet_ip=$(terraform output -raw droplet_ipv4)" >> $GITHUB_OUTPUT
           echo "app_url=$(terraform output -raw app_url)" >> $GITHUB_OUTPUT
           echo "ssh_port=$(terraform output -raw ssh_port)" >> $GITHUB_OUTPUT
