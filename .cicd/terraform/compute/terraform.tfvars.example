@@ -1,0 +1,9 @@
+# Example terraform variables file
+# Copy this to terraform.tfvars and fill in your values
+
+do_token = "your-digitalocean-token"
+ssh_key_fingerprint = "your-ssh-key-fingerprint" 
+ssh_public_key = "ssh-rsa AAAAB3Nza... your-public-key"
+environment = "staging"
+allowed_ssh_cidr_blocks = ["0.0.0.0/0"]  # Restrict this to your IP for security
+emergency_ssh_access = true 

@@ -1,0 +1,25 @@
+name: 'Get Runner IP and Update Firewall'
+description: 'Gets runner IP and updates firewall'
+
+outputs:
+  runner_ip:
+    description: "Runner IP"
+    value: ${{ steps.runner-ip.outputs.runner_ip }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get Runner IP and Update Firewall
+      id: runner-ip
+      shell: bash
+      env:
+        DO_TOKEN: ${{ env.DO_TOKEN }}
+      run: |
+          # Get runner's public IP
+          RUNNER_IP=$(curl -s https://ifconfig.me)
+          echo "Runner IP: $RUNNER_IP"
+          echo "::add-mask::$RUNNER_IP"
+          echo "runner_ip=$RUNNER_IP" >> $GITHUB_OUTPUT
+          
+          # Set the IP for Terraform
+          echo "TF_VAR_runner_ip=$RUNNER_IP" >> $GITHUB_ENV

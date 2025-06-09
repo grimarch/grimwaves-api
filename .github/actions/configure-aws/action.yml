@@ -1,0 +1,25 @@
+name: 'Configure AWS CLI for DigitalOcean Spaces'
+description: 'Configures AWS CLI for DigitalOcean Spaces'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure AWS CLI for DigitalOcean Spaces
+      shell: bash
+      run: |
+        # Install AWS CLI if not present (usually pre-installed in GitHub runners)
+        if ! command -v aws &> /dev/null; then
+          echo "Installing AWS CLI..."
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+        else
+          echo "AWS CLI already installed: $(aws --version)"
+        fi
+        
+        # Configure AWS CLI for DigitalOcean Spaces
+        aws configure set aws_access_key_id "${{ env.AWS_ACCESS_KEY_ID }}"
+        aws configure set aws_secret_access_key "${{ env.AWS_SECRET_ACCESS_KEY }}"
+        aws configure set default.region fra1
+        
+        echo "✅ AWS CLI configured for DigitalOcean Spaces"
