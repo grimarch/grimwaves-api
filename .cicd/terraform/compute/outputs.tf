@@ -67,11 +67,6 @@ output "active_droplet_ip" {
   description = "IP address of the active droplet"
 }
 
-output "inactive_droplet_ip" {
-  value = var.environment == "production" && lookup(var.blue_green_deployment, var.environment, false) ? digitalocean_droplet.app_inactive[0].ipv4_address : null
-  description = "IP address of the inactive droplet (blue/green)"
-}
-
 output "ssh_port" {
   description = "SSH port used for connections to the droplet"
   value       = var.ssh_port

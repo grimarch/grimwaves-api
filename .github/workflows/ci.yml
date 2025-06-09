@@ -3,15 +3,54 @@ name: CI Pipeline
 on:
   push:
     branches: ['**']
-    tags: ['v*.*.*'] # Также запускаем по тегам вида v1.2.3
+    tags: ['v*.*.*'] # Also run on tags like v1.2.3
   pull_request:
     branches: ['**']
 
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
 permissions:
   contents: read
-  packages: write # Необходимо для push в GHCR
+  packages: write # For pushing to GHCR
 
 jobs:
+  prepare:
+    name: Prepare for Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      tag: ${{ steps.set-tag.outputs.tag }}
+    steps:
+      - name: Set environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            # Auto-deploy only to staging environment on push to master
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set image tag
+        id: set-tag
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.tag }}" != "latest" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            # For automated pushes to master, use the commit SHA
+            echo "tag=sha-${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
   lint:
     name: Lint Code
     runs-on: ubuntu-latest
@@ -21,10 +60,6 @@ jobs:
 
       - name: Setup Python and Poetry
         uses: ./.github/actions/setup-python-poetry
-        # Опционально, если нужны другие версии Python/Poetry:
-        # with:
-        #   python-version: '3.x' 
-        #   poetry-version: '1.x.x'
 
       - name: Run Ruff Linter
         run: poetry run ruff check .
@@ -180,7 +215,6 @@ jobs:
         run: |
           docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build
           
-      # Логи vault-agent могут быть полезны при сбое, но не при успехе
       - name: Show vault-agent debug info on failure
         if: failure()
         run: |
@@ -264,14 +298,91 @@ jobs:
         if: always() # Always run to clean up
         run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down
 
+  scan_docker_images:
+    name: Scan Docker Images for Vulnerabilities
+    runs-on: ubuntu-latest
+    needs: [prepare, unit_test, integration_test] # Run in parallel with e2e_test
+    env:
+      COMPOSE_ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and Poetry
+        uses: ./.github/actions/setup-python-poetry
+
+      - name: Ensure Vault Agent directories exist
+        run: mkdir -p vault-agent/{token,rendered,templates,sockets,auth,certs}
+
+      - name: Set up Vault Agent credentials
+        run: |
+          echo "${{ secrets.VAULT_ROLE_ID }}" > vault-agent/auth/role-id
+          echo "${{ secrets.VAULT_SECRET_ID }}" > vault-agent/auth/secret-id
+
+      - name: Install Docker Compose
+        uses: KengoTODA/actions-setup-docker-compose@v1
+        with:
+          version: '2.29.2' # specify the version you need
+
+      - name: Pull images defined in docker-compose
+        run: |
+          echo "🔍 Getting list of images from docker-compose configuration..."
+          echo "Using docker-compose.${COMPOSE_ENVIRONMENT}.yml"
+          docker-compose -f docker-compose.yml -f docker-compose.${COMPOSE_ENVIRONMENT}.yml build --pull
+
+      - name: Scan docker images for vulnerabilities
+        run: |
+          echo "🛡️  Scanning Docker images for vulnerabilities..."
+          overall_status=0
+          
+          # Get list of images from docker-compose configuration
+          echo "Using docker-compose.${COMPOSE_ENVIRONMENT}.yml for scanning"
+          images_to_scan=$(docker-compose -f docker-compose.yml -f docker-compose.${COMPOSE_ENVIRONMENT}.yml config --images)
+          echo "Images to scan: $images_to_scan"
+          
+          # Create cache directory for Trivy
+          mkdir -p .cache/trivy
+          
+          # Scan each image
+          for image in $images_to_scan; do
+            echo "--> Scanning $image..."
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v $(pwd)/.cache/trivy:/root/.cache/ \
+              -v $(pwd):/scan-target \
+              -w /scan-target \
+              aquasec/trivy:latest \
+              image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL --no-progress "$image" || overall_status=1
+          done
+          
+          # Check final status
+          if [ $overall_status -ne 0 ]; then
+            echo "🔥 Vulnerabilities found in one or more images!"
+            exit 1
+          else
+            echo "✅ Image scanning complete. No HIGH or CRITICAL vulnerabilities found."
+          fi
+
+      - name: Fix permissions for Trivy cache
+        run: |
+          sudo chown -R $USER:$USER .cache/trivy
+
+      - name: Upload vulnerability scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-images-vulnerability-scan
+          path: .cache/trivy/
+          retention-days: 7
+
   build_and_push_docker_image:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: [unit_test, integration_test, e2e_test] # Now depends on unit/integration and E2E tests
-    permissions: # Добавляем/обновляем permissions для загрузки SARIF
+    needs: [unit_test, integration_test, e2e_test, scan_docker_images] # Now depends on all test jobs and docker image scanning
+    permissions: # Add/update permissions for upload-sarif
       contents: read
       packages: write
-      security-events: write # Необходимо для github/codeql-action/upload-sarif
+      security-events: write # Needed for github/codeql-action/upload-sarif
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -319,21 +430,21 @@ jobs:
           severity: 'HIGH,CRITICAL' # Fail on HIGH or CRITICAL vulnerabilities
           exit-code: '1' # Exit with code 1 if vulnerabilities of specified severity are found
           vuln-type: 'os,library'
-          ignore-unfixed: true # Игнорировать уязвимости, для которых нет исправления
+          ignore-unfixed: true # Ignore vulnerabilities for which there is no fix
 
       - name: Upload Trivy scan results to GitHub Security Tab
-        if: github.event_name != 'pull_request' # Только если сканирование было выполнено
+        if: github.event_name != 'pull_request' # Only if scanning was performed
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'
-          category: 'docker-image' # Категория для группировки в Security Tab
+          category: 'docker-image' # Category for grouping in Security Tab
 
       - name: Upload Trivy scan report as artifact (table format)
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: trivy-scan-report-table
-          path: trivy-scan-report-table.txt # Временный файл для отчета в формате table
+          path: trivy-scan-report-table.txt # Temporary file for table report
           retention-days: 7
       
       - name: Run Trivy again for table output (temporary step for artifact)
@@ -353,20 +464,20 @@ jobs:
   create_release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: build_and_push_docker_image # Запускаем после успешной сборки и пуша образа
-    if: startsWith(github.ref, 'refs/tags/v') # Только для тегов вида v*.*.*
+    needs: build_and_push_docker_image # Run after successful build and push of image (which includes all test dependencies)
+    if: startsWith(github.ref, 'refs/tags/v') # Only for tags like v*.*.*
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4 # Нужен для доступа к README, если захотим его прикрепить или использовать в теле
+        uses: actions/checkout@v4 # Needed for access to README, if we want to attach it or use in the body
 
       - name: Get image digest
-        # Этот шаг может быть сложнее, если build_push не выводит дайджест напрямую
-        # или если нужно получить дайджест конкретного тега из GHCR.
-        # Для простоты пока пропустим точное указание дайджеста в релизе.
-        # Дайджест образа доступен в outputs шага docker/build-push-action, если он был выполнен:
-        # ${{ needs.build_and_push_docker_image.outputs.digest }} - но needs.job_id.outputs не работает так просто
-        # Вместо этого можно передавать outputs между jobs через артефакты или использовать API.
-        # Пока сделаем релиз без явного дайджеста образа в теле.
+        # This step can be more complex if build_push doesn't output digest directly
+        # or if we need to get digest of a specific tag from GHCR.
+        # For simplicity, we'll skip exact digest in the release for now.
+        # Digest of the image is available in the outputs of the docker/build-push-action step, if it was performed:
+        # ${{ needs.build_and_push_docker_image.outputs.digest }} - but needs.job_id.outputs doesn't work simply
+        # Instead, we can pass outputs between jobs via artifacts or use API.
+        # For now, we'll make the release without an explicit digest of the image in the body.
         run: echo "Image digest can be found in the build logs or GHCR for tag ${{ github.ref_name }}"
 
       - name: Create Release
@@ -375,7 +486,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }} # Используем имя тега, которое вызвало workflow
+          tag_name: ${{ github.ref_name }} # Use the tag name that triggered the workflow
           release_name: Release ${{ github.ref_name }}
           body: |
             Automated release for tag ${{ github.ref_name }}.

@@ -17,14 +17,6 @@ on:
         default: 'latest'
         type: string
 
-  push:
-    branches:
-      - master
-      - feature/cicd  # Временно для тестирования
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-
 permissions:
   contents: read
   packages: read
@@ -83,115 +75,31 @@ jobs:
           terraform_version: 1.7.5
 
       - name: Configure AWS CLI for DigitalOcean Spaces
-        run: |
-          # Install AWS CLI if not present (usually pre-installed in GitHub runners)
-          if ! command -v aws &> /dev/null; then
-            echo "Installing AWS CLI..."
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            unzip awscliv2.zip
-            sudo ./aws/install
-          else
-            echo "AWS CLI already installed: $(aws --version)"
-          fi
-          
-          # Configure AWS CLI for DigitalOcean Spaces
-          aws configure set aws_access_key_id "${{ secrets.AWS_ACCESS_KEY_ID }}"
-          aws configure set aws_secret_access_key "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-          aws configure set default.region fra1
-          
-          echo "✅ AWS CLI configured for DigitalOcean Spaces"
+        uses: ./.github/actions/configure-aws
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Get Vault Token
         id: vault-token
+        uses: ./.github/actions/get-vault-token
         env:
           VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
           VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }}
           VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
-        run: |
-          # Create temporary files for role_id and secret_id
-          echo "$VAULT_ROLE_ID" > role_id.tmp
-          echo "$VAULT_SECRET_ID" > secret_id.tmp
-          
-          # Get token from Vault
-          VAULT_TOKEN=$(vault write -tls-skip-verify -field=token auth/approle/login \
-                          role_id=@role_id.tmp \
-                          secret_id=@secret_id.tmp)
-          
-          # Remove temporary files
-          rm role_id.tmp secret_id.tmp
-          
-          # Mask the token in logs for security
-          echo "::add-mask::$VAULT_TOKEN"
-          
-          # Set output and env var
-          echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
-          echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
 
       - name: Get Runner IP and Update Firewall
         id: runner-ip
+        uses: ./.github/actions/get-runner-ip
         env:
           DO_TOKEN: ${{ secrets.DO_TOKEN }}
-        run: |
-          # Get runner's public IP
-          RUNNER_IP=$(curl -s https://ifconfig.me)
-          echo "Runner IP: $RUNNER_IP"
-          echo "::add-mask::$RUNNER_IP"
-          echo "runner_ip=$RUNNER_IP" >> $GITHUB_OUTPUT
-          
-          # Set the IP for Terraform
-          echo "TF_VAR_runner_ip=$RUNNER_IP" >> $GITHUB_ENV
 
       - name: Extract SSH Public Key
         id: ssh-public-key
-        run: |
-          # Create temporary private key file
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          
-          # Extract public key from private key
-          ssh-keygen -y -f /tmp/deploy_key > /tmp/deploy_key.pub
-          
-          # Read public key and set as environment variable and output
-          SSH_PUBLIC_KEY=$(cat /tmp/deploy_key.pub)
-          echo "::add-mask::$SSH_PUBLIC_KEY"
-          echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_ENV
-          echo "ssh_public_key=$SSH_PUBLIC_KEY" >> $GITHUB_OUTPUT
-          
-          # Generate fingerprints in both SHA256 and MD5 formats
-          COMPUTED_SHA256=$(ssh-keygen -l -f /tmp/deploy_key.pub | awk '{print $2}' | sed 's/^SHA256://')
-          COMPUTED_MD5=$(ssh-keygen -l -E md5 -f /tmp/deploy_key.pub | awk '{print $2}' | sed 's/^MD5://')
-          
-          echo "🔍 SSH Key Verification:"
-          echo "  Computed SHA256: $COMPUTED_SHA256"
-          echo "  Computed MD5:    $COMPUTED_MD5"
-          echo "  DO fingerprint:  ${{ secrets.SSH_KEY_FINGERPRINT }}"
-          
-          # Check which format matches
-          if [ "$COMPUTED_SHA256" = "${{ secrets.SSH_KEY_FINGERPRINT }}" ]; then
-            echo "✅ SSH key fingerprints match (SHA256 format)!"
-          elif [ "$COMPUTED_MD5" = "${{ secrets.SSH_KEY_FINGERPRINT }}" ]; then
-            echo "✅ SSH key fingerprints match (MD5 format)!"
-          else
-            echo "❌ SSH key fingerprints DO NOT match!"
-            echo "   DigitalOcean fingerprint: ${{ secrets.SSH_KEY_FINGERPRINT }}"
-            echo "   Your key SHA256:         $COMPUTED_SHA256"
-            echo "   Your key MD5:            $COMPUTED_MD5"
-            echo ""
-            echo "   This means SSH_PRIVATE_KEY and SSH_KEY_FINGERPRINT in GitHub secrets don't correspond"
-            echo "   You need to either:"
-            echo "   1. Update SSH_KEY_FINGERPRINT to one of the above values"
-            echo "   2. Or update SSH_PRIVATE_KEY to match the DigitalOcean fingerprint"
-            echo ""
-            echo "   💡 To get your key's fingerprint:"
-            echo "      SHA256: ssh-keygen -l -f ~/.ssh/your_key.pub"
-            echo "      MD5:    ssh-keygen -l -E md5 -f ~/.ssh/your_key.pub"
-            exit 1
-          fi
-          
-          # Clean up temporary files
-          rm -f /tmp/deploy_key /tmp/deploy_key.pub
-          
-          echo "✅ SSH public key extracted and set for Terraform"
+        uses: ./.github/actions/extract-ssh-public-key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KEY_FINGERPRINT: ${{ secrets.SSH_KEY_FINGERPRINT }}
 
       - name: Initialize Terraform
         working-directory: .cicd/terraform/compute
@@ -370,9 +278,11 @@ jobs:
           echo "Droplet IP: ${{ needs.terraform.outputs.droplet_ip }}"
           echo "SSH Port: ${{ needs.terraform.outputs.ssh_port }}"
           
+          echo "Waiting for 60 seconds to ensure droplet is initialized..."
+          sleep 60
           # Wait for SSH to become available first
           echo "Testing SSH port availability..."
-          for i in {1..20}; do
+          for i in {1..30}; do
             if timeout 10 bash -c "</dev/tcp/${{ needs.terraform.outputs.droplet_ip }}/${{ needs.terraform.outputs.ssh_port }}"; then
               echo "✅ SSH port ${{ needs.terraform.outputs.ssh_port }} is now available!"
               break
@@ -493,19 +403,21 @@ jobs:
           echo "🔧 SSH configuration complete (port ${{ needs.terraform.outputs.ssh_port }})"
 
       - name: Copy Docker Compose files
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
         run: |
           # Prepare docker-compose files
           echo "🔧 Preparing docker-compose files..."
-          echo "Environment: ${{ needs.prepare.outputs.environment }}"
-          if [ "${{ needs.prepare.outputs.environment }}" == "production" ]; then
-            echo "🔧 Preparing docker-compose files for production..."
-            sed -i 's/docker-compose.dev.yml/docker-compose.prod.yml/g' Makefile
-            TARGET_COMPOSE="docker-compose.yml docker-compose.prod.yml"
-          else
-            echo "🔧 Preparing docker-compose files for staging..."
-            sed -i 's/docker-compose.dev.yml/docker-compose.staging.yml/g' Makefile
-            TARGET_COMPOSE="docker-compose.yml docker-compose.staging.yml"
-          fi
+          echo "Environment: $ENVIRONMENT"
+          
+          # Set environment-specific compose file
+          TARGET_COMPOSE="docker-compose.yml docker-compose.${ENVIRONMENT}.yml"
+          
+          echo "🔧 Using docker-compose.${ENVIRONMENT}.yml for deployment"
+          echo "Target compose files: $TARGET_COMPOSE"
+          
+          # Update Makefile to use environment-specific compose file
+          sed -i "s/docker-compose.dev.yml/docker-compose.${ENVIRONMENT}.yml/g" Makefile
           
           # Copy files to remote server using custom port from Terraform
           scp -P ${{ needs.terraform.outputs.ssh_port }} $TARGET_COMPOSE Dockerfile Makefile .dockerignore pyproject.toml README.md deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves/
@@ -715,15 +627,35 @@ jobs:
           rm .env.tmp
 
       - name: Verify Deployment
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          DROPLET_IP: ${{ needs.terraform.outputs.droplet_ip }}
         run: |
           # Wait for services to start
           echo "Waiting for services to start..."
           sleep 30
           
-          # Check if the service is responding
-          curl -sSf --retry 5 --retry-delay 10 "${{ needs.terraform.outputs.app_url }}/health" || (echo "Service health check failed!" && exit 1)
+          # Determine health check URL based on environment
+          if [ "$ENVIRONMENT" == "staging" ]; then
+            DOMAIN="staging-grimwaves.duckdns.org"
+            HEALTH_URL="${DOMAIN}/health"
+          elif [ "$ENVIRONMENT" == "production" ]; then
+            DOMAIN="grimwaves.duckdns.org"
+            HEALTH_URL="${DOMAIN}/health"
+          else
+            DOMAIN="${{ needs.terraform.outputs.app_url }}"
+            HEALTH_URL="${DOMAIN}/health"
+          fi
+
+          echo "Domain: $DOMAIN"
+          echo "Health check URL: $HEALTH_URL"
+
+          curl -sSf -k --retry 5 --retry-delay 10 \
+            --resolve $DOMAIN:443:$DROPLET_IP \
+            "https://$HEALTH_URL" \
+            || (echo "❌ Service health check failed" && exit 1)
           
-          echo "Deployment completed successfully!"
+          echo "✅ Deployment completed successfully!"
 
   notify:
     if: ${{ false }}

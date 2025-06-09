@@ -1,0 +1,39 @@
+name: 'Get Vault Token'
+description: 'Gets Vault token from Vault'
+
+outputs:
+  token:
+    description: "Vault token"
+    value: ${{ steps.vault-token.outputs.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get Vault Token
+      id: vault-token
+      shell: bash
+      env:
+        VAULT_ADDR: ${{ env.VAULT_ADDR }}
+        VAULT_ROLE_ID: ${{ env.VAULT_ROLE_ID }}
+        VAULT_SECRET_ID: ${{ env.VAULT_SECRET_ID }}
+      run: |
+          # Create temporary files for role_id and secret_id
+          echo "$VAULT_ROLE_ID" > role_id.tmp
+          echo "$VAULT_SECRET_ID" > secret_id.tmp
+          
+          # Get token from Vault
+          VAULT_TOKEN=$(vault write -tls-skip-verify -field=token auth/approle/login \
+                          role_id=@role_id.tmp \
+                          secret_id=@secret_id.tmp)
+          
+          # Remove temporary files
+          rm role_id.tmp secret_id.tmp
+          
+          # Mask the token in logs for security
+          echo "::add-mask::$VAULT_TOKEN"
+          
+          # Set output and env var
+          echo "token=$VAULT_TOKEN" >> $GITHUB_OUTPUT
+          echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
+
+          echo "✅ Vault token extracted and set for Terraform"

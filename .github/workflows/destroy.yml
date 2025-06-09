@@ -61,6 +61,9 @@ jobs:
 
       - name: Extract SSH Public Key
         uses: ./.github/actions/extract-ssh-public-key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KEY_FINGERPRINT: ${{ secrets.SSH_KEY_FINGERPRINT }}
 
       - name: Get Vault Token
         uses: ./.github/actions/get-vault-token
@@ -71,6 +74,8 @@ jobs:
 
       - name: Get Runner IP and Update Firewall
         uses: ./.github/actions/get-runner-ip
+        env:
+          DO_TOKEN: ${{ secrets.DO_TOKEN }}
 
       - name: Initialize Terraform
         working-directory: .cicd/terraform/compute
