@@ -529,6 +529,12 @@ jobs:
         run: |
           # Copy traefik files to remote server
           scp -P ${{ needs.terraform.outputs.ssh_port }} -r traefik deploy@${{ needs.terraform.outputs.droplet_ip }}:/var/app/grimwaves
+          
+          # Create acme.json file for Let's Encrypt certificates with correct permissions
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -p ${{ needs.terraform.outputs.ssh_port }} \
+              deploy@${{ needs.terraform.outputs.droplet_ip }} \
+              "touch /var/app/grimwaves/traefik/acme.json && chmod 600 /var/app/grimwaves/traefik/acme.json"
 
       - name: Test Network Connectivity
         run: |
@@ -626,6 +632,14 @@ jobs:
             echo "VAULT_ADDR=$VAULT_ADDR"
             echo "VAULT_SKIP_VERIFY=$VAULT_SKIP_VERIFY"
             echo "VAULT_ROLE_NAME=grimwaves-role"
+            
+            # DuckDNS configuration for Traefik
+            if [ "$ENVIRONMENT" == "staging" ]; then
+              echo "DUCKDNS_DOMAIN=staging-grimwaves.duckdns.org"
+            elif [ "$ENVIRONMENT" == "production" ]; then
+              echo "DUCKDNS_DOMAIN=grimwaves.duckdns.org"
+            fi
+            echo "DUCKDNS_TOKEN=${{ secrets.DUCKDNS_TOKEN }}"
 
             # Add any environment-specific variables from GitHub Environment
             if [ -n "${{ vars.ADDITIONAL_ENV_VARS }}" ]; then
