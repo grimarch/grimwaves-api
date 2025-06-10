@@ -1,11 +1,9 @@
-version: '3.8'
-
+---
 services:
   traefik:
     volumes:
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/config:/etc/traefik/config:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/acme.json:/etc/traefik/acme.json
     environment:
       - DUCKDNS_TOKEN=${DUCKDNS_TOKEN}
@@ -18,6 +16,8 @@ services:
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.tls.certresolver=duckdns"
       - "traefik.http.routers.dashboard.middlewares=auth@file"
+    extra_hosts:
+      - "${DUCKDNS_DOMAIN}:127.0.0.1"
 
   api:
     labels:
@@ -41,20 +41,14 @@ services:
       - /mnt/data/logs:/app/logs
       - ./vault-agent/sockets:/vault-agent/sockets
       - ./vault-agent/rendered:/vault-agent/rendered:ro
-    depends_on:
-      - redis
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.3-alpine
+    ports:
+      - "6379:6379"
     volumes:
-      - /mnt/data/redis:/data
+      - redis-data:/data
     command: redis-server --appendonly yes
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
 
   celery-worker:
     build:
@@ -79,4 +73,10 @@ services:
 
 # Don't define volumes here - use bind mounts to DigitalOcean Volume
 # The base redis-data volume from docker-compose.yml will be ignored
+
+networks:
+  grimwaves-network:
+    external: true  # Use network created by base docker-compose.yml
+
+# No volumes section - using bind mounts to DigitalOcean Volume
 
