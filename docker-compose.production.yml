@@ -74,9 +74,6 @@ services:
 # Don't define volumes here - use bind mounts to DigitalOcean Volume
 # The base redis-data volume from docker-compose.yml will be ignored
 
-networks:
-  grimwaves-network:
-    external: true  # Use network created by base docker-compose.yml
-
+# No networks section - using network configuration from base docker-compose.yml
 # No volumes section - using bind mounts to DigitalOcean Volume
 
