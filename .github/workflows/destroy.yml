@@ -60,6 +60,7 @@ jobs:
         uses: ./.github/actions/configure-aws
 
       - name: Extract SSH Public Key
+        id: ssh-public-key
         uses: ./.github/actions/extract-ssh-public-key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -73,6 +74,7 @@ jobs:
           VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
 
       - name: Get Runner IP and Update Firewall
+        id: runner-ip
         uses: ./.github/actions/get-runner-ip
         env:
           DO_TOKEN: ${{ secrets.DO_TOKEN }}
@@ -131,6 +133,8 @@ jobs:
             -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
             -var="ssh_port=${{ secrets.SSH_PORT || 2222 }}" \
             -var="emergency_ssh_access=false" \
+            -var="spaces_access_key_id=${{ secrets.DO_SPACES_ACCESS_KEY_ID }}" \
+            -var="spaces_secret_access_key=${{ secrets.DO_SPACES_SECRET_ACCESS_KEY }}" \
             -out=destroyplan
 
       - name: Terraform Destroy Apply (First Attempt)
@@ -175,13 +179,15 @@ jobs:
           terraform plan -destroy \
             -var="do_token=${{ secrets.DO_TOKEN }}" \
             -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
-            -var="ssh_public_key=${{ env.TF_VAR_ssh_public_key }}" \
+            -var="ssh_public_key=${{ steps.ssh-public-key.outputs.ssh_public_key }}" \
             -var="environment=${{ needs.validate.outputs.environment }}" \
-            -var='allowed_ssh_cidr_blocks=["${{ env.TF_VAR_runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
+            -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
             -var="emergency_ssh_access=false" \
             -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
             -var="ssh_port=${{ secrets.SSH_PORT || 2222 }}" \
             -var="vpn_ip=${{ secrets.VPN_IP }}" \
+            -var="spaces_access_key_id=${{ secrets.DO_SPACES_ACCESS_KEY_ID }}" \
+            -var="spaces_secret_access_key=${{ secrets.DO_SPACES_SECRET_ACCESS_KEY }}" \
             -out=fresh_destroyplan
 
       - name: Apply Fresh Destroy Plan
@@ -253,13 +259,15 @@ jobs:
           terraform plan -destroy \
             -var="do_token=${{ secrets.DO_TOKEN }}" \
             -var="ssh_key_fingerprint=${{ secrets.SSH_KEY_FINGERPRINT }}" \
-            -var="ssh_public_key=${{ env.TF_VAR_ssh_public_key }}" \
+            -var="ssh_public_key=${{ steps.ssh-public-key.outputs.ssh_public_key }}" \
             -var="environment=${{ needs.validate.outputs.environment }}" \
-            -var='allowed_ssh_cidr_blocks=["${{ env.TF_VAR_runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
+            -var='allowed_ssh_cidr_blocks=["${{ steps.runner-ip.outputs.runner_ip }}/32", "${{ secrets.VPN_IP }}/32"]' \
             -var="emergency_ssh_access=false" \
             -var="vault_server_ip=${{ secrets.VAULT_SERVER_IP }}" \
             -var="ssh_port=${{ secrets.SSH_PORT || 2222 }}" \
             -var="vpn_ip=${{ secrets.VPN_IP }}" \
+            -var="spaces_access_key_id=${{ secrets.DO_SPACES_ACCESS_KEY_ID }}" \
+            -var="spaces_secret_access_key=${{ secrets.DO_SPACES_SECRET_ACCESS_KEY }}" \
             -out=final_destroyplan
           
           echo "🚀 Applying final destroy plan..."
