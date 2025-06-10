@@ -324,7 +324,7 @@ jobs:
         with:
           version: '2.29.2' # specify the version you need
 
-      - name: Pull images defined in docker-compose
+      - name: Pull and build images defined in docker-compose
         run: |
           echo "🔍 Getting list of images from docker-compose configuration..."
           echo "Using docker-compose.${COMPOSE_ENVIRONMENT}.yml"
