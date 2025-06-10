@@ -6,28 +6,28 @@ services:
       - ./traefik/config:/etc/traefik/config:ro
       - ./traefik/config/certs:/etc/traefik/certs:ro
     environment:
-      - DUCKDNS_TOKEN=${DUCKDNS_TOKEN}
-      - DUCKDNS_DOMAIN=${DUCKDNS_DOMAIN}
+      - DUCKDNS_TOKEN=${DUCKDNS_TOKEN:-dummy_token}
+      - DUCKDNS_DOMAIN=${DUCKDNS_DOMAIN:-staging-grimwaves.duckdns.org}
       - ENVIRONMENT=staging
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.dashboard.rule=Host(`traefik.${DUCKDNS_DOMAIN}`)"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${DUCKDNS_DOMAIN:-staging-grimwaves.duckdns.org}`)"
       - "traefik.http.routers.dashboard.service=api@internal"
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.tls.certresolver=duckdns"
       - "traefik.http.routers.dashboard.middlewares=auth@file"
     extra_hosts:
-      - "${DUCKDNS_DOMAIN}:127.0.0.1"
+      - "${DUCKDNS_DOMAIN:-staging-grimwaves.duckdns.org}:127.0.0.1"
 
   api:
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`${DUCKDNS_DOMAIN}`)"
+      - "traefik.http.routers.api.rule=Host(`${DUCKDNS_DOMAIN:-staging-grimwaves.duckdns.org}`)"
       - "traefik.http.routers.api.entrypoints=websecure"
       - "traefik.http.services.api.loadbalancer.server.port=8000"
       - "traefik.http.routers.api.tls=true"
-      - "traefik.http.routers.api.tls.domains[0].main=${DUCKDNS_DOMAIN}"
-      - "traefik.http.routers.api-http.rule=Host(`${DUCKDNS_DOMAIN}`)"
+      - "traefik.http.routers.api.tls.domains[0].main=${DUCKDNS_DOMAIN:-staging-grimwaves.duckdns.org}"
+      - "traefik.http.routers.api-http.rule=Host(`${DUCKDNS_DOMAIN:-staging-grimwaves.duckdns.org}`)"
       - "traefik.http.routers.api-http.entrypoints=web"
       - "traefik.http.routers.api-http.service=api@docker"
     environment:
